@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Albion 装備クラフト原価計算ツール</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0d1016;
+  --panel:#141822;
+  --panel2:#191e2a;
+  --border:#252c3b;
+  --border-light:#2f3648;
+  --gold:#e0ac54;
+  --gold-soft:#c99a4f;
+  --text:#e8eaf0;
+  --text-dim:#8b93a7;
+  --text-faint:#5b6478;
+  --green:#4ade80;
+  --red:#f87171;
+  --blue:#60a5fa;
+  --radius:10px;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  background:radial-gradient(circle at 20% 0%, #171c28 0%, var(--bg) 55%);
+  color:var(--text);
+  font-family:'Noto Sans JP','Inter',sans-serif;
+  min-height:100vh;
+}
+::-webkit-scrollbar{width:10px;height:10px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:#2a3142;border-radius:8px;}
+::-webkit-scrollbar-thumb:hover{background:#3a4256;}
+
+/* ===== Top App Bar ===== */
+.appbar{
+  display:flex;align-items:center;gap:18px;
+  padding:12px 20px;
+  border-bottom:1px solid var(--border);
+  background:linear-gradient(180deg,#151a25,#12151d);
+  position:sticky;top:0;z-index:50;
+}
+.brand{display:flex;align-items:center;gap:10px;white-space:nowrap;}
+.brand .logo{
+  width:34px;height:34px;border-radius:9px;
+  background:linear-gradient(135deg,var(--gold),#8a5a22);
+  display:flex;align-items:center;justify-content:center;
+  font-weight:800;color:#1a1408;font-size:16px;
+  box-shadow:0 2px 10px rgba(224,172,84,.35);
+}
+.brand-text b{font-size:15px;letter-spacing:.2px;display:block;}
+.brand-text span{font-size:11px;color:var(--text-dim);}
+
+/* Safari-style tabs */
+.tabbar{
+  display:flex;gap:6px;background:#0c0e14;border:1px solid var(--border);
+  border-radius:11px;padding:4px;flex:1;max-width:560px;
+}
+.tabbtn{
+  flex:1;border:none;background:transparent;color:var(--text-dim);
+  padding:9px 14px;border-radius:8px;font-size:13.5px;font-weight:600;
+  cursor:pointer;transition:.15s;display:flex;align-items:center;justify-content:center;gap:6px;
+}
+.tabbtn:hover{color:var(--text);background:#151a24;}
+.tabbtn.active{
+  background:linear-gradient(180deg,#232a3a,#1b202c);
+  color:var(--gold);
+  box-shadow:0 1px 0 rgba(255,255,255,.04) inset, 0 4px 10px rgba(0,0,0,.35);
+}
+.tabbtn .dot{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.0;}
+.tabbtn.active .dot{opacity:1;}
+
+.appbar-right{display:flex;align-items:center;gap:10px;margin-left:auto;}
+.pill{
+  font-size:11.5px;color:var(--text-dim);background:#161b26;border:1px solid var(--border);
+  padding:6px 10px;border-radius:20px;display:flex;align-items:center;gap:6px;
+}
+.pill b{color:var(--gold);}
+.btn{
+  border:1px solid var(--border-light);background:#161b26;color:var(--text);
+  padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:600;cursor:pointer;transition:.15s;
+}
+.btn:hover{background:#1d2432;border-color:var(--gold-soft);}
+.btn.primary{background:linear-gradient(135deg,var(--gold),#b5822f);color:#20160a;border:none;}
+.btn.primary:hover{filter:brightness(1.08);}
+
+/* ===== Layout ===== */
+.page{display:none;animation:fadein .18s ease;}
+.page.active{display:block;}
+@keyframes fadein{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
+
+.layout{display:flex;min-height:calc(100vh - 60px);}
+.sidebar{
+  width:230px;flex-shrink:0;border-right:1px solid var(--border);
+  background:#0e1119;padding:16px 10px;
+}
+.sidebar h4{
+  font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--text-faint);
+  margin:14px 8px 6px;font-weight:700;
+}
+.catbtn{
+  width:100%;text-align:left;background:transparent;border:none;color:var(--text-dim);
+  padding:9px 10px;border-radius:8px;font-size:13.5px;cursor:pointer;display:flex;
+  align-items:center;gap:9px;font-weight:500;transition:.15s;
+}
+.catbtn .ic{width:18px;text-align:center;opacity:.75;}
+.catbtn:hover{background:#171d2a;color:var(--text);}
+.catbtn.active{background:linear-gradient(90deg,#2a2211,#191e2a);color:var(--gold);font-weight:700;}
+.catcount{margin-left:auto;font-size:10.5px;color:var(--text-faint);background:#171c28;padding:1px 7px;border-radius:9px;}
+.catbtn.active .catcount{color:var(--gold-soft);}
+
+.main{flex:1;padding:20px 24px;min-width:0;}
+
+/* ===== Item grid picker ===== */
+.searchrow{display:flex;gap:10px;margin-bottom:14px;}
+.searchrow input{
+  flex:1;background:var(--panel);border:1px solid var(--border);color:var(--text);
+  padding:10px 14px;border-radius:9px;font-size:13.5px;outline:none;
+}
+.searchrow input:focus{border-color:var(--gold-soft);}
+.itemgrid{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;
+}
+.itemcard{
+  background:var(--panel);border:1px solid var(--border);border-radius:10px;
+  padding:10px 8px 9px;text-align:center;cursor:pointer;transition:.14s;
+}
+.itemcard:hover{border-color:var(--gold-soft);transform:translateY(-2px);background:var(--panel2);}
+.itemcard.selected{border-color:var(--gold);background:linear-gradient(180deg,#241d0f,#181c26);box-shadow:0 0 0 1px var(--gold) inset;}
+.itemcard img{width:56px;height:56px;object-fit:contain;image-rendering:-webkit-optimize-contrast;filter:drop-shadow(0 2px 4px rgba(0,0,0,.5));}
+.itemcard .nm{font-size:11px;margin-top:6px;color:var(--text-dim);line-height:1.3;}
+.itemcard.selected .nm{color:var(--text);font-weight:600;}
+.tag-artifact{
+  display:inline-block;margin-top:4px;font-size:9px;color:#f3c98b;background:#3a2a12;
+  padding:1px 6px;border-radius:6px;
+}
+
+/* ===== Item groups (accordion by subtype) ===== */
+.grouptoolbar{display:flex;gap:8px;margin-bottom:12px;}
+.tinybtn{
+  background:var(--panel2,#171c28);border:1px solid var(--border);color:var(--text-dim);
+  padding:6px 12px;border-radius:7px;font-size:11.5px;cursor:pointer;transition:.15s;
+}
+.tinybtn:hover{border-color:var(--gold-soft);color:var(--text);}
+
+.subgroup{
+  border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden;
+  background:var(--panel);
+}
+.subgroup-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:10px 14px;cursor:pointer;user-select:none;background:#141821;transition:.15s;
+}
+.subgroup-header:hover{background:#171d2a;}
+.subgroup-header .stt{font-size:13px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px;}
+.subgroup-header .scount{font-size:10.5px;font-weight:600;color:var(--text-faint);background:#1c2230;padding:1px 8px;border-radius:9px;}
+.subgroup-header .chev{font-size:11px;color:var(--text-faint);transition:transform .15s;}
+.subgroup.collapsed > .subgroup-header .chev{transform:rotate(-90deg);}
+.subgroup.collapsed > .subgroup-body{display:none;}
+.subgroup-body{padding:12px 14px;}
+
+.artifact-subgroup{margin-top:10px;margin-bottom:0;border-color:#3a2a12;background:#171307;}
+.artifact-header{background:#1d1509;}
+.artifact-header:hover{background:#241a0c;}
+.artifact-header .stt{color:#f3c98b;}
+.artifact-header .scount{background:#3a2a12;color:#f3c98b;}
+
+/* ===== Cards / panels ===== */
+.card{
+  background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+  padding:18px 20px;margin-bottom:16px;
+}
+.card h3{margin:0 0 4px;font-size:14.5px;color:var(--text);}
+.card .sub{font-size:12px;color:var(--text-faint);margin-bottom:14px;}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px;}
+@media(max-width:900px){.grid2{grid-template-columns:1fr;}}
+
+.field{margin-bottom:12px;}
+.field label{display:block;font-size:11.5px;color:var(--text-dim);margin-bottom:5px;font-weight:600;}
+.matlabel-active{color:var(--gold-soft,#d4af37);}
+.field input[type=number], .field input[type=text], .field select{
+  width:100%;background:#0e1119;border:1px solid var(--border);color:var(--text);
+  padding:9px 11px;border-radius:8px;font-size:13.5px;outline:none;
+}
+.field input:focus, .field select:focus{border-color:var(--gold-soft);}
+.row{display:flex;gap:12px;}
+.row > *{flex:1;}
+
+.seg{display:flex;background:#0e1119;border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+.seg button{flex:1;background:transparent;border:none;color:var(--text-dim);padding:8px 6px;font-size:12.5px;cursor:pointer;font-weight:600;}
+.seg button.active{background:linear-gradient(180deg,#e0ac54,#c1893a);color:#241a08;}
+.seg button:not(:last-child){border-right:1px solid var(--border);}
+
+.togglecard{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  background:#0e1119;border:1px solid var(--border);border-radius:9px;padding:11px 13px;margin-bottom:10px;
+}
+.togglecard .tt{font-size:13px;font-weight:600;}
+.togglecard .dd{font-size:11px;color:var(--text-faint);margin-top:2px;}
+.switch{position:relative;width:40px;height:22px;flex-shrink:0;}
+.switch input{opacity:0;width:0;height:0;}
+.slider{position:absolute;cursor:pointer;inset:0;background:#2b3244;border-radius:22px;transition:.2s;}
+.slider:before{content:"";position:absolute;height:16px;width:16px;left:3px;top:3px;background:#cfd4de;border-radius:50%;transition:.2s;}
+input:checked + .slider{background:linear-gradient(135deg,var(--gold),#a97b30);}
+input:checked + .slider:before{transform:translateX(18px);background:#1c1608;}
+
+.divider{height:1px;background:var(--border);margin:16px 0;}
+
+/* summary */
+.summary-box{
+  background:linear-gradient(160deg,#171308,#151a24 60%);
+  border:1px solid #3a2f16;border-radius:12px;padding:18px 20px;
+}
+.summary-title{font-size:12px;color:var(--gold-soft);font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;}
+.srow{display:flex;justify-content:space-between;align-items:center;padding:7px 0;font-size:13px;border-bottom:1px dashed #262c3a;}
+.srow:last-child{border-bottom:none;}
+.srow .k{color:var(--text-dim);}
+.srow .v{font-weight:700;font-variant-numeric:tabular-nums;}
+.srow.total{padding-top:12px;margin-top:4px;border-top:1px solid #3a2f16;border-bottom:none;}
+.srow.total .k{color:var(--text);font-size:14px;font-weight:700;}
+.srow.total .v{font-size:19px;}
+.profit-pos{color:var(--green);}
+.profit-neg{color:var(--red);}
+
+.selected-item-header{display:flex;align-items:center;gap:14px;margin-bottom:16px;}
+.selected-item-header img{width:52px;height:52px;object-fit:contain;background:#0e1119;border:1px solid var(--border);border-radius:10px;padding:6px;}
+.selected-item-header .info b{font-size:16px;}
+.selected-item-header .info .meta{font-size:11.5px;color:var(--text-faint);margin-top:2px;}
+.empty-hint{
+  color:var(--text-faint);font-size:13px;text-align:center;padding:60px 20px;
+  border:1px dashed var(--border);border-radius:12px;
+}
+
+/* price table (原価入力) */
+.subtabs{display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:0;}
+.subtabbtn{
+  background:transparent;border:none;color:var(--text-dim);padding:9px 4px;font-size:13px;font-weight:600;
+  cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;
+}
+.subtabbtn.active{color:var(--gold);border-bottom-color:var(--gold);}
+.pricegrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;}
+.pricecol{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px 14px;}
+.pricecol h5{margin:0 0 8px;font-size:12.5px;color:var(--gold-soft);text-transform:uppercase;letter-spacing:.05em;}
+.prow{display:flex;align-items:center;justify-content:space-between;padding:4px 0;gap:8px;}
+.prow label{font-size:12px;color:var(--text-dim);flex-shrink:0;width:64px;}
+.prow input{
+  width:100%;background:#0e1119;border:1px solid var(--border);color:var(--text);
+  padding:5px 8px;border-radius:6px;font-size:12.5px;text-align:right;outline:none;
+}
+.prow input:focus{border-color:var(--gold-soft);}
+.prow.subtle label{color:var(--text-faint);}
+
+.note{
+  font-size:11.5px;color:var(--text-faint);background:#11151e;border:1px solid var(--border);
+  border-radius:8px;padding:9px 12px;line-height:1.6;margin-top:6px;
+}
+.note b{color:var(--text-dim);}
+
+.helpbox{font-size:11.5px;color:var(--text-faint);line-height:1.7;margin-top:8px;}
+.badge{display:inline-block;font-size:10px;padding:2px 7px;border-radius:6px;background:#1c2230;color:var(--text-dim);margin-left:6px;}
+
+@media(max-width:760px){
+  .layout{flex-direction:column;}
+  .sidebar{width:100%;display:flex;overflow-x:auto;padding:10px;gap:4px;border-right:none;border-bottom:1px solid var(--border);}
+  .sidebar h4{display:none;}
+  .catbtn{flex-shrink:0;width:auto;}
+  .grid2{grid-template-columns:1fr;}
+  .appbar{flex-wrap:wrap;}
+  .tabbar{order:3;max-width:100%;}
+}
+</style>
+</head>
+<body>
+
+<div class="appbar">
+  <div class="brand">
+    <div class="logo">A</div>
+    <div class="brand-text"><b>Albion 原価計算</b><span>Crafting Profit Tool</span></div>
+  </div>
+  <div class="tabbar">
+    <button class="tabbtn active" data-page="cost"><span class="dot"></span>原価入力</button>
+    <button class="tabbtn" data-page="calc"><span class="dot"></span>計算</button>
+    <button class="tabbtn" data-page="sell"><span class="dot"></span>売値</button>
+  </div>
+  <div class="appbar-right">
+    <div class="pill">利益 <b id="topProfit">—</b></div>
+    <button class="btn" id="resetBtn">リセット</button>
+  </div>
+</div>
+
+<!-- ============ PAGE 1: 原価入力 (Material Cost Input) ============ -->
+<div class="page active" id="page-cost">
+  <div class="main" style="padding:22px 26px;">
+    <div class="subtabs">
+      <button class="subtabbtn active" data-sub="refined">精製素材</button>
+      <button class="subtabbtn" data-sub="artifact">アーティファクト</button>
+    </div>
+
+    <div id="sub-refined">
+      <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
+        実際に買う価格（silver / 個）を入力してください。ブラウザに自動保存されます。T4〜T8は補正段階（.0〜.4）ごとに入力できます。
+      </p>
+      <div class="pricegrid" id="refinedGrid"></div>
+    </div>
+
+    <div id="sub-artifact" style="display:none;">
+      <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
+        「専門化装備（アーティファクト装備）」を作る際に必要なアーティファクト欠片の価格です。ティアごとに入力してください。
+      </p>
+      <div class="pricegrid" id="artifactGrid"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ PAGE 2: 計算 (Calculation) ============ -->
+<div class="page" id="page-calc">
+  <div class="layout">
+    <div class="sidebar" id="calcSidebar">
+      <h4>装備カテゴリ</h4>
+      <div id="categoryList"></div>
+    </div>
+    <div class="main">
+      <div class="searchrow">
+        <input type="text" id="itemSearch" placeholder="装備名で検索…（例: Royal, Knight, Bow）">
+      </div>
+      <div id="itemGrid"></div>
+
+      <div id="recipePanelWrap" style="margin-top:22px;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ PAGE 3: 売値 (Sell Price) ============ -->
+<div class="page" id="page-sell">
+  <div class="main" style="padding:22px 26px;max-width:1100px;">
+    <div id="sellSelectedHeader"></div>
+
+    <div class="grid2">
+      <div class="card">
+        <h3>売却設定</h3>
+        <div class="sub">マーケットでの売値と手数料条件を入力してください。</div>
+
+        <div class="field">
+          <label>売却方法</label>
+          <div class="seg" id="sellTypeSeg">
+            <button class="active" data-v="quick">クイック売却（買い注文で即売）</button>
+            <button data-v="order">売り注文（指値で出品）</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>売値（1個あたり / silver）</label>
+          <input type="number" id="sellPrice" placeholder="例: 45000" min="0">
+        </div>
+
+        <div class="togglecard">
+          <div><div class="tt">プレミアム加入</div><div class="dd">販売税 8% → 4% に軽減されます</div></div>
+          <label class="switch"><input type="checkbox" id="sellPremium"><span class="slider"></span></label>
+        </div>
+
+        <div class="field">
+          <label>出品手数料（セットアップ手数料）</label>
+          <input type="number" id="setupFeeRate" value="2.5" step="0.1" min="0">
+        </div>
+        <div class="note">売り注文（指値出品）の場合のみ、出品手数料 2.5% がかかります。クイック売却では出品手数料はかかりません。</div>
+      </div>
+
+      <div class="card summary-box">
+        <div class="summary-title">損益シミュレーション</div>
+        <div class="srow"><span class="k">売値（単価）</span><span class="v" id="sv_sellprice">0</span></div>
+        <div class="srow"><span class="k">出品手数料</span><span class="v" id="sv_setupfee">-0</span></div>
+        <div class="srow"><span class="k">販売税（<span id="sv_taxrate">8</span>%）</span><span class="v" id="sv_tax">-0</span></div>
+        <div class="srow"><span class="k">手取り売却額</span><span class="v" id="sv_net">0</span></div>
+        <div class="srow"><span class="k">クラフト原価（計算タブより）</span><span class="v" id="sv_cost">0</span></div>
+        <div class="srow total"><span class="k">利益（1個あたり）</span><span class="v" id="sv_profit">0</span></div>
+        <div class="srow"><span class="k">利益率</span><span class="v" id="sv_margin">0%</span></div>
+        <div class="helpbox" id="sellHint">※ 計算タブで装備を選択すると原価が反映されます。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="items_data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
