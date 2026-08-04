@@ -1,1 +1,375 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Albion 装備クラフト原価計算ツール</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0d1016;
+  --panel:#141822;
+  --panel2:#191e2a;
+  --border:#252c3b;
+  --border-light:#2f3648;
+  --gold:#e0ac54;
+  --gold-soft:#c99a4f;
+  --text:#e8eaf0;
+  --text-dim:#8b93a7;
+  --text-faint:#5b6478;
+  --green:#4ade80;
+  --red:#f87171;
+  --blue:#60a5fa;
+  --radius:10px;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  background:radial-gradient(circle at 20% 0%, #171c28 0%, var(--bg) 55%);
+  color:var(--text);
+  font-family:'Noto Sans JP','Inter',sans-serif;
+  min-height:100vh;
+}
+::-webkit-scrollbar{width:10px;height:10px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:#2a3142;border-radius:8px;}
+::-webkit-scrollbar-thumb:hover{background:#3a4256;}
 
+/* ===== Top App Bar ===== */
+.appbar{
+  display:flex;align-items:center;gap:18px;
+  padding:12px 20px;
+  border-bottom:1px solid var(--border);
+  background:linear-gradient(180deg,#151a25,#12151d);
+  position:sticky;top:0;z-index:50;
+}
+.brand{display:flex;align-items:center;gap:10px;white-space:nowrap;}
+.brand .logo{
+  width:34px;height:34px;border-radius:9px;
+  background:linear-gradient(135deg,var(--gold),#8a5a22);
+  display:flex;align-items:center;justify-content:center;
+  font-weight:800;color:#1a1408;font-size:16px;
+  box-shadow:0 2px 10px rgba(224,172,84,.35);
+}
+.brand-text b{font-size:15px;letter-spacing:.2px;display:block;}
+.brand-text span{font-size:11px;color:var(--text-dim);}
+
+/* Safari-style tabs */
+.tabbar{
+  display:flex;gap:6px;background:#0c0e14;border:1px solid var(--border);
+  border-radius:11px;padding:4px;flex:1;max-width:640px;
+}
+.tabbtn{
+  flex:1;border:none;background:transparent;color:var(--text-dim);
+  padding:9px 10px;border-radius:8px;font-size:13px;font-weight:600;
+  cursor:pointer;transition:.15s;display:flex;align-items:center;justify-content:center;gap:6px;
+  white-space:nowrap;
+}
+.tabbtn:hover{color:var(--text);background:#151a24;}
+.tabbtn.active{
+  background:linear-gradient(180deg,#232a3a,#1b202c);
+  color:var(--gold);
+  box-shadow:0 1px 0 rgba(255,255,255,.04) inset, 0 4px 10px rgba(0,0,0,.35);
+}
+.tabbtn .dot{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.0;}
+.tabbtn.active .dot{opacity:1;}
+
+.appbar-right{display:flex;align-items:center;gap:10px;margin-left:auto;}
+.pill{
+  font-size:11.5px;color:var(--text-dim);background:#161b26;border:1px solid var(--border);
+  padding:6px 10px;border-radius:20px;display:flex;align-items:center;gap:6px;white-space:nowrap;
+}
+.pill b{color:var(--gold);}
+.btn{
+  border:1px solid var(--border-light);background:#161b26;color:var(--text);
+  padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:600;cursor:pointer;transition:.15s;
+}
+.btn:hover{background:#1d2432;border-color:var(--gold-soft);}
+.btn.primary{background:linear-gradient(135deg,var(--gold),#b5822f);color:#20160a;border:none;}
+.btn.primary:hover{filter:brightness(1.08);}
+
+/* ===== Layout ===== */
+.page{display:none;animation:fadein .18s ease;}
+.page.active{display:block;}
+@keyframes fadein{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
+
+.layout{display:flex;min-height:calc(100vh - 60px);}
+.sidebar{
+  width:210px;flex-shrink:0;border-right:1px solid var(--border);
+  background:#0e1119;padding:16px 10px;
+}
+.sidebar h4{
+  font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--text-faint);
+  margin:14px 8px 6px;font-weight:700;
+}
+.catbtn{
+  width:100%;text-align:left;background:transparent;border:none;color:var(--text-dim);
+  padding:9px 10px;border-radius:8px;font-size:13.5px;cursor:pointer;display:flex;
+  align-items:center;gap:9px;font-weight:500;transition:.15s;
+}
+.catbtn .ic{width:18px;text-align:center;opacity:.75;}
+.catbtn:hover{background:#171d2a;color:var(--text);}
+.catbtn.active{background:linear-gradient(90deg,#2a2211,#191e2a);color:var(--gold);font-weight:700;}
+.catcount{margin-left:auto;font-size:10.5px;color:var(--text-faint);background:#171c28;padding:1px 7px;border-radius:9px;}
+.catbtn.active .catcount{color:var(--gold-soft);}
+
+.main{flex:1;padding:20px 24px;min-width:0;}
+.main.wide{max-width:1500px;}
+
+/* ===== Search ===== */
+.searchrow{display:flex;gap:10px;margin-bottom:14px;}
+.searchrow input{
+  flex:1;background:var(--panel);border:1px solid var(--border);color:var(--text);
+  padding:10px 14px;border-radius:9px;font-size:13.5px;outline:none;
+}
+.searchrow input:focus{border-color:var(--gold-soft);}
+
+.tag-artifact{
+  display:inline-block;margin-left:6px;font-size:9px;color:#f3c98b;background:#3a2a12;
+  padding:1px 6px;border-radius:6px;vertical-align:middle;
+}
+
+/* ===== Item groups (accordion by subtype) ===== */
+.grouptoolbar{display:flex;gap:8px;margin-bottom:12px;}
+.tinybtn{
+  background:var(--panel2,#171c28);border:1px solid var(--border);color:var(--text-dim);
+  padding:6px 12px;border-radius:7px;font-size:11.5px;cursor:pointer;transition:.15s;
+}
+.tinybtn:hover{border-color:var(--gold-soft);color:var(--text);}
+
+.subgroup{
+  border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden;
+  background:var(--panel);
+}
+.subgroup-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:9px 14px;cursor:pointer;user-select:none;background:#141821;transition:.15s;
+}
+.subgroup-header:hover{background:#171d2a;}
+.subgroup-header .stt{font-size:13px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:9px;}
+.subgroup-header .scount{font-size:10.5px;font-weight:600;color:var(--text-faint);background:#1c2230;padding:1px 8px;border-radius:9px;}
+.subgroup-header .chev{font-size:11px;color:var(--text-faint);transition:transform .15s;}
+.subgroup.collapsed > .subgroup-header .chev{transform:rotate(-90deg);}
+.subgroup.collapsed > .subgroup-body{display:none;}
+.subgroup-body{padding:10px 14px;}
+.rep-thumb{
+  width:26px;height:26px;object-fit:contain;background:#0e1119;border:1px solid var(--border);
+  border-radius:6px;padding:3px;flex-shrink:0;
+}
+
+/* ===== Item rows (used in 売値 / 利益率 / 作成リスト pickers) ===== */
+.itemrows{display:flex;flex-direction:column;gap:6px;}
+.itemrow{
+  display:flex;align-items:center;gap:12px;background:#11151e;border:1px solid var(--border);
+  border-radius:8px;padding:7px 10px;
+}
+.itemrow img{width:32px;height:32px;object-fit:contain;flex-shrink:0;}
+.itemrow .irname{flex:1;font-size:12.5px;color:var(--text);min-width:0;}
+.itemrow .irfield{width:150px;flex-shrink:0;}
+.itemrow .irfield input{
+  width:100%;background:#0e1119;border:1px solid var(--border);color:var(--text);
+  padding:6px 9px;border-radius:6px;font-size:12.5px;outline:none;text-align:right;
+}
+.itemrow .irfield input:focus{border-color:var(--gold-soft);}
+.itemrow .addbtn{flex-shrink:0;}
+.itemrow-profit{gap:10px;flex-wrap:wrap;}
+.itemrow-profit .irname{flex-basis:220px;}
+.irstat{display:flex;flex-direction:column;align-items:flex-end;min-width:78px;}
+.irstat .irk{font-size:9.5px;color:var(--text-faint);}
+.irstat .irv{font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums;}
+
+/* ===== Settings bar (shared across 売値/利益率/作成リスト) ===== */
+.settingsbar{padding:14px 18px;margin-bottom:16px;}
+.settingsbar-row{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;}
+.settingsbar .field{margin-bottom:0;}
+.minitoggle{display:flex;align-items:center;gap:6px;cursor:pointer;padding-bottom:9px;}
+.minitoggle input{display:none;}
+.minitoggle .slider{position:relative;width:34px;height:19px;background:#2b3244;border-radius:20px;transition:.2s;flex-shrink:0;}
+.minitoggle .slider:before{content:"";position:absolute;height:13px;width:13px;left:3px;top:3px;background:#cfd4de;border-radius:50%;transition:.2s;}
+.minitoggle input:checked + .slider{background:linear-gradient(135deg,var(--gold),#a97b30);}
+.minitoggle input:checked + .slider:before{transform:translateX(15px);background:#1c1608;}
+.minitoggle .mtlabel{font-size:11.5px;color:var(--text-dim);white-space:nowrap;}
+
+/* ===== Cards / panels ===== */
+.card{
+  background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+  padding:18px 20px;margin-bottom:16px;
+}
+.card h3{margin:0 0 4px;font-size:14.5px;color:var(--text);}
+.card .sub{font-size:12px;color:var(--text-faint);margin-bottom:14px;}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px;}
+.grid2.build{grid-template-columns:1.3fr 1fr;align-items:start;}
+@media(max-width:1100px){.grid2.build{grid-template-columns:1fr;}}
+@media(max-width:900px){.grid2{grid-template-columns:1fr;}}
+
+.field{margin-bottom:12px;}
+.field label{display:block;font-size:11.5px;color:var(--text-dim);margin-bottom:5px;font-weight:600;}
+.field input[type=number], .field input[type=text], .field select{
+  width:100%;background:#0e1119;border:1px solid var(--border);color:var(--text);
+  padding:9px 11px;border-radius:8px;font-size:13.5px;outline:none;
+}
+.field input:focus, .field select:focus{border-color:var(--gold-soft);}
+.field input:disabled{opacity:.4;}
+.row{display:flex;gap:12px;}
+.row > *{flex:1;}
+
+/* summary */
+.summary-box{
+  background:linear-gradient(160deg,#171308,#151a24 60%);
+  border:1px solid #3a2f16;border-radius:12px;padding:18px 20px;
+}
+.summary-title{font-size:12px;color:var(--gold-soft);font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;}
+.srow{display:flex;justify-content:space-between;align-items:center;padding:7px 0;font-size:13px;border-bottom:1px dashed #262c3a;}
+.srow:last-child{border-bottom:none;}
+.srow .k{color:var(--text-dim);}
+.srow .v{font-weight:700;font-variant-numeric:tabular-nums;}
+.srow.total{padding-top:12px;margin-top:4px;border-top:1px solid #3a2f16;border-bottom:none;}
+.srow.total .k{color:var(--text);font-size:14px;font-weight:700;}
+.srow.total .v{font-size:19px;}
+.profit-pos{color:var(--green);}
+.profit-neg{color:var(--red);}
+
+.empty-hint{
+  color:var(--text-faint);font-size:13px;text-align:center;padding:60px 20px;
+  border:1px dashed var(--border);border-radius:12px;
+}
+
+/* ===== 作成リスト（craft list）===== */
+.craftrows{display:flex;flex-direction:column;gap:8px;}
+.craftrow{display:flex;align-items:center;gap:10px;background:#11151e;border:1px solid var(--border);border-radius:8px;padding:7px 10px;}
+.craftrow img{width:30px;height:30px;object-fit:contain;flex-shrink:0;}
+.craftrow .irname{flex:1;font-size:12.5px;min-width:0;}
+.craftrow .craftqty{
+  width:56px;background:#0e1119;border:1px solid var(--border);color:var(--text);
+  padding:5px 6px;border-radius:6px;font-size:12.5px;text-align:center;outline:none;
+}
+.craftrow .craftcost{width:90px;text-align:right;font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--gold-soft);}
+
+/* price table (原価入力) */
+.subtabs{display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:0;}
+.subtabbtn{
+  background:transparent;border:none;color:var(--text-dim);padding:9px 4px;font-size:13px;font-weight:600;
+  cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;
+}
+.subtabbtn.active{color:var(--gold);border-bottom-color:var(--gold);}
+.pricegrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;}
+.pricecol{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px 14px;}
+.pricecol h5{margin:0 0 8px;font-size:12.5px;color:var(--gold-soft);text-transform:uppercase;letter-spacing:.05em;}
+.prow{display:flex;align-items:center;justify-content:space-between;padding:4px 0;gap:8px;}
+.prow label{font-size:12px;color:var(--text-dim);flex-shrink:0;width:64px;}
+.prow input{
+  width:100%;background:#0e1119;border:1px solid var(--border);color:var(--text);
+  padding:5px 8px;border-radius:6px;font-size:12.5px;text-align:right;outline:none;
+}
+.prow input:focus{border-color:var(--gold-soft);}
+.prow.subtle label{color:var(--text-faint);}
+
+.note{
+  font-size:11.5px;color:var(--text-faint);background:#11151e;border:1px solid var(--border);
+  border-radius:8px;padding:9px 12px;line-height:1.6;margin-top:6px;
+}
+.note b{color:var(--text-dim);}
+
+.helpbox{font-size:11.5px;color:var(--text-faint);line-height:1.7;margin-top:8px;}
+.badge{display:inline-block;font-size:10px;padding:2px 7px;border-radius:6px;background:#1c2230;color:var(--text-dim);margin-left:6px;}
+
+@media(max-width:760px){
+  .layout{flex-direction:column;}
+  .sidebar{width:100%;display:flex;overflow-x:auto;padding:10px;gap:4px;border-right:none;border-bottom:1px solid var(--border);}
+  .sidebar h4{display:none;}
+  .catbtn{flex-shrink:0;width:auto;}
+  .grid2{grid-template-columns:1fr;}
+  .appbar{flex-wrap:wrap;}
+  .tabbar{order:3;max-width:100%;}
+}
+</style>
+</head>
+<body>
+
+<div class="appbar">
+  <div class="brand">
+    <div class="logo">A</div>
+    <div class="brand-text"><b>Albion 原価計算</b><span>Crafting Profit Tool</span></div>
+  </div>
+  <div class="tabbar">
+    <button class="tabbtn active" data-page="cost"><span class="dot"></span>原価入力</button>
+    <button class="tabbtn" data-page="sell"><span class="dot"></span>売値</button>
+    <button class="tabbtn" data-page="profit"><span class="dot"></span>利益率</button>
+    <button class="tabbtn" data-page="build"><span class="dot"></span>作成リスト</button>
+  </div>
+  <div class="appbar-right">
+    <div class="pill">作成リスト利益 <b id="topProfit">—</b></div>
+    <button class="btn" id="resetBtn">リセット</button>
+  </div>
+</div>
+
+<!-- ============ PAGE 1: 原価入力 (Material Cost Input) ============ -->
+<div class="page active" id="page-cost">
+  <div class="main" style="padding:22px 26px;">
+    <div class="subtabs">
+      <button class="subtabbtn active" data-sub="refined">精製素材</button>
+      <button class="subtabbtn" data-sub="artifact">アーティファクト</button>
+    </div>
+
+    <div id="sub-refined">
+      <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
+        実際に買う価格（silver / 個）を入力してください。ブラウザに自動保存されます。T4〜T8は補正段階（.0〜.4）ごとに入力できます。
+      </p>
+      <div class="pricegrid" id="refinedGrid"></div>
+    </div>
+
+    <div id="sub-artifact" style="display:none;">
+      <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
+        「専門化装備（アーティファクト装備）」を作る際に必要なアーティファクト欠片の価格です。ティアごとに入力してください。
+      </p>
+      <div class="pricegrid" id="artifactGrid"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ PAGE 2: 売値 (Sell Price Entry — 全アイテム一括入力) ============ -->
+<div class="page" id="page-sell">
+  <div class="layout">
+    <div class="sidebar"><h4>装備カテゴリ</h4><div id="sellCategoryList"></div></div>
+    <div class="main">
+      <div id="sellSettingsBar"></div>
+      <div class="searchrow"><input type="text" id="sellSearch" placeholder="装備名で検索…（例: Royal, Knight, Bow）"></div>
+      <div id="sellItemList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ PAGE 3: 利益率 (Profit Margin Overview) ============ -->
+<div class="page" id="page-profit">
+  <div class="layout">
+    <div class="sidebar"><h4>装備カテゴリ</h4><div id="profitCategoryList"></div></div>
+    <div class="main">
+      <div id="profitSettingsBar"></div>
+      <div class="searchrow"><input type="text" id="profitSearch" placeholder="装備名で検索…（例: Royal, Knight, Bow）"></div>
+      <div id="profitItemList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ PAGE 4: 作成リスト (Build / Craft List) ============ -->
+<div class="page" id="page-build">
+  <div class="layout">
+    <div class="sidebar"><h4>装備カテゴリ</h4><div id="buildCategoryList"></div></div>
+    <div class="main main wide">
+      <div id="buildSettingsBar"></div>
+      <div class="grid2 build">
+        <div>
+          <div class="searchrow"><input type="text" id="buildSearch" placeholder="装備名で検索…（例: Royal, Knight, Bow）"></div>
+          <div id="buildItemList"></div>
+        </div>
+        <div id="craftListPanel"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="items_data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
