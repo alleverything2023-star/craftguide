@@ -58,12 +58,13 @@ body{
 /* Safari-style tabs */
 .tabbar{
   display:flex;gap:6px;background:#0c0e14;border:1px solid var(--border);
-  border-radius:11px;padding:4px;flex:1;max-width:560px;
+  border-radius:11px;padding:4px;flex:1;max-width:640px;
 }
 .tabbtn{
   flex:1;border:none;background:transparent;color:var(--text-dim);
-  padding:9px 14px;border-radius:8px;font-size:13.5px;font-weight:600;
+  padding:9px 10px;border-radius:8px;font-size:13px;font-weight:600;
   cursor:pointer;transition:.15s;display:flex;align-items:center;justify-content:center;gap:6px;
+  white-space:nowrap;
 }
 .tabbtn:hover{color:var(--text);background:#151a24;}
 .tabbtn.active{
@@ -77,7 +78,7 @@ body{
 .appbar-right{display:flex;align-items:center;gap:10px;margin-left:auto;}
 .pill{
   font-size:11.5px;color:var(--text-dim);background:#161b26;border:1px solid var(--border);
-  padding:6px 10px;border-radius:20px;display:flex;align-items:center;gap:6px;
+  padding:6px 10px;border-radius:20px;display:flex;align-items:center;gap:6px;white-space:nowrap;
 }
 .pill b{color:var(--gold);}
 .btn{
@@ -95,7 +96,7 @@ body{
 
 .layout{display:flex;min-height:calc(100vh - 60px);}
 .sidebar{
-  width:230px;flex-shrink:0;border-right:1px solid var(--border);
+  width:210px;flex-shrink:0;border-right:1px solid var(--border);
   background:#0e1119;padding:16px 10px;
 }
 .sidebar h4{
@@ -114,29 +115,19 @@ body{
 .catbtn.active .catcount{color:var(--gold-soft);}
 
 .main{flex:1;padding:20px 24px;min-width:0;}
+.main.wide{max-width:1500px;}
 
-/* ===== Item grid picker ===== */
+/* ===== Search ===== */
 .searchrow{display:flex;gap:10px;margin-bottom:14px;}
 .searchrow input{
   flex:1;background:var(--panel);border:1px solid var(--border);color:var(--text);
   padding:10px 14px;border-radius:9px;font-size:13.5px;outline:none;
 }
 .searchrow input:focus{border-color:var(--gold-soft);}
-.itemgrid{
-  display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;
-}
-.itemcard{
-  background:var(--panel);border:1px solid var(--border);border-radius:10px;
-  padding:10px 8px 9px;text-align:center;cursor:pointer;transition:.14s;
-}
-.itemcard:hover{border-color:var(--gold-soft);transform:translateY(-2px);background:var(--panel2);}
-.itemcard.selected{border-color:var(--gold);background:linear-gradient(180deg,#241d0f,#181c26);box-shadow:0 0 0 1px var(--gold) inset;}
-.itemcard img{width:56px;height:56px;object-fit:contain;image-rendering:-webkit-optimize-contrast;filter:drop-shadow(0 2px 4px rgba(0,0,0,.5));}
-.itemcard .nm{font-size:11px;margin-top:6px;color:var(--text-dim);line-height:1.3;}
-.itemcard.selected .nm{color:var(--text);font-weight:600;}
+
 .tag-artifact{
-  display:inline-block;margin-top:4px;font-size:9px;color:#f3c98b;background:#3a2a12;
-  padding:1px 6px;border-radius:6px;
+  display:inline-block;margin-left:6px;font-size:9px;color:#f3c98b;background:#3a2a12;
+  padding:1px 6px;border-radius:6px;vertical-align:middle;
 }
 
 /* ===== Item groups (accordion by subtype) ===== */
@@ -153,15 +144,52 @@ body{
 }
 .subgroup-header{
   display:flex;align-items:center;justify-content:space-between;
-  padding:10px 14px;cursor:pointer;user-select:none;background:#141821;transition:.15s;
+  padding:9px 14px;cursor:pointer;user-select:none;background:#141821;transition:.15s;
 }
 .subgroup-header:hover{background:#171d2a;}
-.subgroup-header .stt{font-size:13px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px;}
+.subgroup-header .stt{font-size:13px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:9px;}
 .subgroup-header .scount{font-size:10.5px;font-weight:600;color:var(--text-faint);background:#1c2230;padding:1px 8px;border-radius:9px;}
 .subgroup-header .chev{font-size:11px;color:var(--text-faint);transition:transform .15s;}
 .subgroup.collapsed > .subgroup-header .chev{transform:rotate(-90deg);}
 .subgroup.collapsed > .subgroup-body{display:none;}
-.subgroup-body{padding:12px 14px;}
+.subgroup-body{padding:10px 14px;}
+.rep-thumb{
+  width:26px;height:26px;object-fit:contain;background:#0e1119;border:1px solid var(--border);
+  border-radius:6px;padding:3px;flex-shrink:0;
+}
+
+/* ===== Item rows (used in 売値 / 利益率 / 作成リスト pickers) ===== */
+.itemrows{display:flex;flex-direction:column;gap:6px;}
+.itemrow{
+  display:flex;align-items:center;gap:12px;background:#11151e;border:1px solid var(--border);
+  border-radius:8px;padding:7px 10px;
+}
+.itemrow img{width:32px;height:32px;object-fit:contain;flex-shrink:0;}
+.itemrow .irname{flex:1;font-size:12.5px;color:var(--text);min-width:0;}
+.itemrow .irfield{width:150px;flex-shrink:0;}
+.itemrow .irfield input{
+  width:100%;background:#0e1119;border:1px solid var(--border);color:var(--text);
+  padding:6px 9px;border-radius:6px;font-size:12.5px;outline:none;text-align:right;
+}
+.itemrow .irfield input:focus{border-color:var(--gold-soft);}
+.itemrow .addbtn{flex-shrink:0;}
+.itemrow-profit{gap:10px;flex-wrap:wrap;}
+.itemrow-profit .irname{flex-basis:220px;}
+.irstat{display:flex;flex-direction:column;align-items:flex-end;min-width:78px;}
+.irstat .irk{font-size:9.5px;color:var(--text-faint);}
+.irstat .irv{font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums;}
+
+/* ===== Settings bar (shared across 売値/利益率/作成リスト) ===== */
+.settingsbar{padding:14px 18px;margin-bottom:16px;}
+.settingsbar-row{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;}
+.settingsbar .field{margin-bottom:0;}
+.minitoggle{display:flex;align-items:center;gap:6px;cursor:pointer;padding-bottom:9px;}
+.minitoggle input{display:none;}
+.minitoggle .slider{position:relative;width:34px;height:19px;background:#2b3244;border-radius:20px;transition:.2s;flex-shrink:0;}
+.minitoggle .slider:before{content:"";position:absolute;height:13px;width:13px;left:3px;top:3px;background:#cfd4de;border-radius:50%;transition:.2s;}
+.minitoggle input:checked + .slider{background:linear-gradient(135deg,var(--gold),#a97b30);}
+.minitoggle input:checked + .slider:before{transform:translateX(15px);background:#1c1608;}
+.minitoggle .mtlabel{font-size:11.5px;color:var(--text-dim);white-space:nowrap;}
 
 /* ===== Cards / panels ===== */
 .card{
@@ -171,38 +199,20 @@ body{
 .card h3{margin:0 0 4px;font-size:14.5px;color:var(--text);}
 .card .sub{font-size:12px;color:var(--text-faint);margin-bottom:14px;}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px;}
+.grid2.build{grid-template-columns:1.3fr 1fr;align-items:start;}
+@media(max-width:1100px){.grid2.build{grid-template-columns:1fr;}}
 @media(max-width:900px){.grid2{grid-template-columns:1fr;}}
 
 .field{margin-bottom:12px;}
 .field label{display:block;font-size:11.5px;color:var(--text-dim);margin-bottom:5px;font-weight:600;}
-.matlabel-active{color:var(--gold-soft,#d4af37);}
 .field input[type=number], .field input[type=text], .field select{
   width:100%;background:#0e1119;border:1px solid var(--border);color:var(--text);
   padding:9px 11px;border-radius:8px;font-size:13.5px;outline:none;
 }
 .field input:focus, .field select:focus{border-color:var(--gold-soft);}
+.field input:disabled{opacity:.4;}
 .row{display:flex;gap:12px;}
 .row > *{flex:1;}
-
-.seg{display:flex;background:#0e1119;border:1px solid var(--border);border-radius:8px;overflow:hidden;}
-.seg button{flex:1;background:transparent;border:none;color:var(--text-dim);padding:8px 6px;font-size:12.5px;cursor:pointer;font-weight:600;}
-.seg button.active{background:linear-gradient(180deg,#e0ac54,#c1893a);color:#241a08;}
-.seg button:not(:last-child){border-right:1px solid var(--border);}
-
-.togglecard{
-  display:flex;align-items:center;justify-content:space-between;gap:10px;
-  background:#0e1119;border:1px solid var(--border);border-radius:9px;padding:11px 13px;margin-bottom:10px;
-}
-.togglecard .tt{font-size:13px;font-weight:600;}
-.togglecard .dd{font-size:11px;color:var(--text-faint);margin-top:2px;}
-.switch{position:relative;width:40px;height:22px;flex-shrink:0;}
-.switch input{opacity:0;width:0;height:0;}
-.slider{position:absolute;cursor:pointer;inset:0;background:#2b3244;border-radius:22px;transition:.2s;}
-.slider:before{content:"";position:absolute;height:16px;width:16px;left:3px;top:3px;background:#cfd4de;border-radius:50%;transition:.2s;}
-input:checked + .slider{background:linear-gradient(135deg,var(--gold),#a97b30);}
-input:checked + .slider:before{transform:translateX(18px);background:#1c1608;}
-
-.divider{height:1px;background:var(--border);margin:16px 0;}
 
 /* summary */
 .summary-box{
@@ -220,14 +230,21 @@ input:checked + .slider:before{transform:translateX(18px);background:#1c1608;}
 .profit-pos{color:var(--green);}
 .profit-neg{color:var(--red);}
 
-.selected-item-header{display:flex;align-items:center;gap:14px;margin-bottom:16px;}
-.selected-item-header img{width:52px;height:52px;object-fit:contain;background:#0e1119;border:1px solid var(--border);border-radius:10px;padding:6px;}
-.selected-item-header .info b{font-size:16px;}
-.selected-item-header .info .meta{font-size:11.5px;color:var(--text-faint);margin-top:2px;}
 .empty-hint{
   color:var(--text-faint);font-size:13px;text-align:center;padding:60px 20px;
   border:1px dashed var(--border);border-radius:12px;
 }
+
+/* ===== 作成リスト（craft list）===== */
+.craftrows{display:flex;flex-direction:column;gap:8px;}
+.craftrow{display:flex;align-items:center;gap:10px;background:#11151e;border:1px solid var(--border);border-radius:8px;padding:7px 10px;}
+.craftrow img{width:30px;height:30px;object-fit:contain;flex-shrink:0;}
+.craftrow .irname{flex:1;font-size:12.5px;min-width:0;}
+.craftrow .craftqty{
+  width:56px;background:#0e1119;border:1px solid var(--border);color:var(--text);
+  padding:5px 6px;border-radius:6px;font-size:12.5px;text-align:center;outline:none;
+}
+.craftrow .craftcost{width:90px;text-align:right;font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--gold-soft);}
 
 /* price table (原価入力) */
 .subtabs{display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:0;}
@@ -277,11 +294,12 @@ input:checked + .slider:before{transform:translateX(18px);background:#1c1608;}
   </div>
   <div class="tabbar">
     <button class="tabbtn active" data-page="cost"><span class="dot"></span>原価入力</button>
-    <button class="tabbtn" data-page="calc"><span class="dot"></span>計算</button>
     <button class="tabbtn" data-page="sell"><span class="dot"></span>売値</button>
+    <button class="tabbtn" data-page="profit"><span class="dot"></span>利益率</button>
+    <button class="tabbtn" data-page="build"><span class="dot"></span>作成リスト</button>
   </div>
   <div class="appbar-right">
-    <div class="pill">利益 <b id="topProfit">—</b></div>
+    <div class="pill">作成リスト利益 <b id="topProfit">—</b></div>
     <button class="btn" id="resetBtn">リセット</button>
   </div>
 </div>
@@ -310,69 +328,42 @@ input:checked + .slider:before{transform:translateX(18px);background:#1c1608;}
   </div>
 </div>
 
-<!-- ============ PAGE 2: 計算 (Calculation) ============ -->
-<div class="page" id="page-calc">
+<!-- ============ PAGE 2: 売値 (Sell Price Entry — 全アイテム一括入力) ============ -->
+<div class="page" id="page-sell">
   <div class="layout">
-    <div class="sidebar" id="calcSidebar">
-      <h4>装備カテゴリ</h4>
-      <div id="categoryList"></div>
-    </div>
+    <div class="sidebar"><h4>装備カテゴリ</h4><div id="sellCategoryList"></div></div>
     <div class="main">
-      <div class="searchrow">
-        <input type="text" id="itemSearch" placeholder="装備名で検索…（例: Royal, Knight, Bow）">
-      </div>
-      <div id="itemGrid"></div>
-
-      <div id="recipePanelWrap" style="margin-top:22px;"></div>
+      <div id="sellSettingsBar"></div>
+      <div class="searchrow"><input type="text" id="sellSearch" placeholder="装備名で検索…（例: Royal, Knight, Bow）"></div>
+      <div id="sellItemList"></div>
     </div>
   </div>
 </div>
 
-<!-- ============ PAGE 3: 売値 (Sell Price) ============ -->
-<div class="page" id="page-sell">
-  <div class="main" style="padding:22px 26px;max-width:1100px;">
-    <div id="sellSelectedHeader"></div>
+<!-- ============ PAGE 3: 利益率 (Profit Margin Overview) ============ -->
+<div class="page" id="page-profit">
+  <div class="layout">
+    <div class="sidebar"><h4>装備カテゴリ</h4><div id="profitCategoryList"></div></div>
+    <div class="main">
+      <div id="profitSettingsBar"></div>
+      <div class="searchrow"><input type="text" id="profitSearch" placeholder="装備名で検索…（例: Royal, Knight, Bow）"></div>
+      <div id="profitItemList"></div>
+    </div>
+  </div>
+</div>
 
-    <div class="grid2">
-      <div class="card">
-        <h3>売却設定</h3>
-        <div class="sub">マーケットでの売値と手数料条件を入力してください。</div>
-
-        <div class="field">
-          <label>売却方法</label>
-          <div class="seg" id="sellTypeSeg">
-            <button class="active" data-v="quick">クイック売却（買い注文で即売）</button>
-            <button data-v="order">売り注文（指値で出品）</button>
-          </div>
+<!-- ============ PAGE 4: 作成リスト (Build / Craft List) ============ -->
+<div class="page" id="page-build">
+  <div class="layout">
+    <div class="sidebar"><h4>装備カテゴリ</h4><div id="buildCategoryList"></div></div>
+    <div class="main main wide">
+      <div id="buildSettingsBar"></div>
+      <div class="grid2 build">
+        <div>
+          <div class="searchrow"><input type="text" id="buildSearch" placeholder="装備名で検索…（例: Royal, Knight, Bow）"></div>
+          <div id="buildItemList"></div>
         </div>
-
-        <div class="field">
-          <label>売値（1個あたり / silver）</label>
-          <input type="number" id="sellPrice" placeholder="例: 45000" min="0">
-        </div>
-
-        <div class="togglecard">
-          <div><div class="tt">プレミアム加入</div><div class="dd">販売税 8% → 4% に軽減されます</div></div>
-          <label class="switch"><input type="checkbox" id="sellPremium"><span class="slider"></span></label>
-        </div>
-
-        <div class="field">
-          <label>出品手数料（セットアップ手数料）</label>
-          <input type="number" id="setupFeeRate" value="2.5" step="0.1" min="0">
-        </div>
-        <div class="note">売り注文（指値出品）の場合のみ、出品手数料 2.5% がかかります。クイック売却では出品手数料はかかりません。</div>
-      </div>
-
-      <div class="card summary-box">
-        <div class="summary-title">損益シミュレーション</div>
-        <div class="srow"><span class="k">売値（単価）</span><span class="v" id="sv_sellprice">0</span></div>
-        <div class="srow"><span class="k">出品手数料</span><span class="v" id="sv_setupfee">-0</span></div>
-        <div class="srow"><span class="k">販売税（<span id="sv_taxrate">8</span>%）</span><span class="v" id="sv_tax">-0</span></div>
-        <div class="srow"><span class="k">手取り売却額</span><span class="v" id="sv_net">0</span></div>
-        <div class="srow"><span class="k">クラフト原価（計算タブより）</span><span class="v" id="sv_cost">0</span></div>
-        <div class="srow total"><span class="k">利益（1個あたり）</span><span class="v" id="sv_profit">0</span></div>
-        <div class="srow"><span class="k">利益率</span><span class="v" id="sv_margin">0%</span></div>
-        <div class="helpbox" id="sellHint">※ 計算タブで装備を選択すると原価が反映されます。</div>
+        <div id="craftListPanel"></div>
       </div>
     </div>
   </div>
