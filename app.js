@@ -224,7 +224,7 @@ function buildArtifactGrid(){
 ======================================================================= */
 let activeCategory = 'head';
 let searchTerm = '';
-let expandedGroups = new Set(); // keys of expanded subtype / artifact groups (default = collapsed)
+let expandedGroups = new Set(); // keys of expanded subtype groups (default = collapsed)
 
 const SUBTYPE_ORDER = {
   weapon: ['sword','axe','mace','hammer','spear','dagger','fist','quarterstaff',
@@ -236,6 +236,21 @@ const SUBTYPE_ORDER = {
   offhand: ['shield','torch','tome'],
   cape: [null],
 };
+
+const SUBTYPE_LABELS = {
+  sword:'ソード', axe:'アックス', mace:'メイス', hammer:'ハンマー',
+  fist:'フィスト', crossbow:'クロスボウ', bow:'ボウ', spear:'スピア',
+  naturestaff:'ネイチャースタッフ', dagger:'ダガー', quarterstaff:'クォータースタッフ',
+  shapeshifterstaff:'シェイプシフタースタッフ', firestaff:'ファイアスタッフ',
+  holystaff:'ホーリースタッフ', arcanestaff:'アルケインスタッフ',
+  froststaff:'フロストスタッフ', cursedstaff:'カースドスタッフ',
+  plate:'プレート', leather:'レザー', cloth:'クロス',
+  shield:'シールド', torch:'トーチ', tome:'魔導書',
+};
+
+function isArtifactItem(item){
+  return !!(item.materials && item.materials.artifact > 0);
+}
 
 function groupKey(sub){
   return activeCategory + '::' + (sub===null || sub===undefined ? '_all' : sub);
@@ -268,7 +283,7 @@ function renderItemCard(item){
   card.className = 'itemcard' + (item.id===STATE.selectedItemId ? ' selected':'');
   card.innerHTML = `<img src="${item.file}" loading="lazy" alt="${item.name}">
     <div class="nm">${item.name}</div>
-    ${item.artifact ? '<span class="tag-artifact">Artifact</span>' : ''}`;
+    ${isArtifactItem(item) ? '<span class="tag-artifact">Artifact</span>' : ''}`;
   card.addEventListener('click', ()=>selectItem(item.id));
   return card;
 }
@@ -276,8 +291,6 @@ function renderItemCard(item){
 function renderSubtypeGroup(g, forceOpen){
   const key = groupKey(g.sub);
   const expanded = forceOpen || expandedGroups.has(key);
-  const normalItems = g.items.filter(i=>!i.artifact);
-  const artifactItems = g.items.filter(i=>i.artifact);
 
   const el = document.createElement('div');
   el.className = 'subgroup' + (expanded ? '' : ' collapsed');
@@ -294,42 +307,12 @@ function renderSubtypeGroup(g, forceOpen){
 
   const body = document.createElement('div');
   body.className = 'subgroup-body';
-
-  if(normalItems.length>0){
-    const normalGrid = document.createElement('div');
-    normalGrid.className = 'itemgrid';
-    normalItems.forEach(item=>normalGrid.appendChild(renderItemCard(item)));
-    body.appendChild(normalGrid);
-  }
-
-  if(artifactItems.length>0){
-    const artKey = key + '::artifact';
-    const artExpanded = forceOpen || expandedGroups.has(artKey);
-    const artWrap = document.createElement('div');
-    artWrap.className = 'subgroup artifact-subgroup' + (artExpanded ? '' : ' collapsed');
-
-    const artHeader = document.createElement('div');
-    artHeader.className = 'subgroup-header artifact-header';
-    artHeader.innerHTML = `<span class="stt">🏺 アーティファクト<span class="scount">${artifactItems.length}</span></span><span class="chev">▾</span>`;
-    artHeader.addEventListener('click', (e)=>{
-      e.stopPropagation();
-      if(expandedGroups.has(artKey)) expandedGroups.delete(artKey); else expandedGroups.add(artKey);
-      renderItemGrid();
-    });
-    artWrap.appendChild(artHeader);
-
-    const artBody = document.createElement('div');
-    artBody.className = 'subgroup-body';
-    const artGrid = document.createElement('div');
-    artGrid.className = 'itemgrid';
-    artifactItems.forEach(item=>artGrid.appendChild(renderItemCard(item)));
-    artBody.appendChild(artGrid);
-    artWrap.appendChild(artBody);
-
-    body.appendChild(artWrap);
-  }
-
+  const grid = document.createElement('div');
+  grid.className = 'itemgrid';
+  g.items.forEach(item=>grid.appendChild(renderItemCard(item)));
+  body.appendChild(grid);
   el.appendChild(body);
+
   return el;
 }
 
@@ -348,7 +331,7 @@ function renderItemGrid(){
   const order = SUBTYPE_ORDER[activeCategory] || [...new Set(list.map(i=>i.subtype))];
   const groups = order.map(sub=>({
     sub,
-    label: sub===null ? null : ((list.find(i=>i.subtype===sub) || {}).subtypeLabel || sub),
+    label: sub===null ? null : (SUBTYPE_LABELS[sub] || sub),
     items: list.filter(i=>i.subtype===sub),
   })).filter(g=>g.items.length>0);
 
@@ -365,17 +348,11 @@ function renderItemGrid(){
   });
 
   toolbar.querySelector('#expandAllBtn').addEventListener('click', ()=>{
-    groups.forEach(g=>{
-      expandedGroups.add(groupKey(g.sub));
-      expandedGroups.add(groupKey(g.sub)+'::artifact');
-    });
+    groups.forEach(g=> expandedGroups.add(groupKey(g.sub)));
     renderItemGrid();
   });
   toolbar.querySelector('#collapseAllBtn').addEventListener('click', ()=>{
-    groups.forEach(g=>{
-      expandedGroups.delete(groupKey(g.sub));
-      expandedGroups.delete(groupKey(g.sub)+'::artifact');
-    });
+    groups.forEach(g=> expandedGroups.delete(groupKey(g.sub)));
     renderItemGrid();
   });
 }
@@ -384,7 +361,7 @@ function selectItem(itemId){
   const item = ITEMS.find(i=>i.id===itemId);
   if(!item) return;
   STATE.selectedItemId = itemId;
-  const m = item.materials || {plank:0,steel:0,leather:0,cloth:0,artifact:item.artifact?1:0};
+  const m = item.materials || {plank:0,steel:0,leather:0,cloth:0,artifact:0};
   STATE.recipe.qty = {
     plank:   m.plank   || 0,
     steel:   m.steel   || 0,
@@ -420,7 +397,7 @@ function renderRecipePanel(){
             <img src="${item.file}" alt="${item.name}">
             <div class="info">
               <b>${item.name}</b>
-              <div class="meta">${CATS.find(c=>c.id===item.category).label} ${item.artifact ? '<span class="badge">アーティファクト装備</span>':''}</div>
+              <div class="meta">${CATS.find(c=>c.id===item.category).label} ${isArtifactItem(item) ? '<span class="badge">アーティファクト装備</span>':''}</div>
             </div>
           </div>
 
