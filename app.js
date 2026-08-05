@@ -51,7 +51,7 @@ function isArtifactItem(item){
 /* ---------------------------------------------------------------------
    Persistent state (localStorage)
 --------------------------------------------------------------------- */
-const LS_KEY = 'albion_calc_state_v4';
+const LS_KEY = 'albion_calc_state_v5';
 
 function defaultSettings(){
   return {
@@ -65,7 +65,7 @@ function defaultSettings(){
 function defaultState(){
   return {
     prices:{},          // prices["plank_T4_1"] = 1234
-    artifactPrices:{},  // artifactPrices["T6"] = 5000
+    artifactPrices:{},  // artifactPrices["itemId_T6"] = 5000 （アーティファクトは装備ライン毎に種類・価格が異なるため装備ごとに管理）
     sellPrices:{},      // sellPrices["itemId_T4_0"] = 45000
     bonusSubtypes:{},    // bonusSubtypes["weapon::sword"] = 10 | 20 （その日の日替わり生産ボーナスは"武器種"単位で付与される）
     settings: defaultSettings(),
@@ -79,6 +79,23 @@ function loadState(){
     if(raw) return Object.assign(defaultState(), JSON.parse(raw));
   }catch(e){}
 
+  // v4（アーティファクト価格をティア一律で管理していた旧バージョン）からの移行
+  // ※ アーティファクトは装備ごとに種類が違うため金額はそのまま引き継げない。
+  //   他のデータ（素材価格・売値・ボーナス設定など）はそのまま引き継ぐ。
+  try{
+    const oldRaw = localStorage.getItem('albion_calc_state_v4');
+    if(oldRaw){
+      const old = JSON.parse(oldRaw);
+      const s = defaultState();
+      s.prices = old.prices || {};
+      s.sellPrices = old.sellPrices || {};
+      s.craftList = old.craftList || {};
+      s.bonusSubtypes = old.bonusSubtypes || {};
+      if(old.settings) Object.assign(s.settings, old.settings);
+      return s;
+    }
+  }catch(e){}
+
   // v3（ボーナスをアイテム単位で登録していた旧バージョン）からの移行
   try{
     const oldRaw = localStorage.getItem('albion_calc_state_v3');
@@ -86,11 +103,9 @@ function loadState(){
       const old = JSON.parse(oldRaw);
       const s = defaultState();
       s.prices = old.prices || {};
-      s.artifactPrices = old.artifactPrices || {};
       s.sellPrices = old.sellPrices || {};
       s.craftList = old.craftList || {};
       if(old.settings) Object.assign(s.settings, old.settings);
-      // 旧: bonusItems["itemId"] = 10|20 → 新: bonusSubtypes["category::subtype"] = 10|20
       if(old.bonusItems){
         Object.keys(old.bonusItems).forEach(itemId=>{
           const it = ITEMS.find(i=>i.id===itemId);
@@ -146,7 +161,6 @@ function importStateFromFile(file){
 
 function refreshEverything(){
   buildRefinedGrid();
-  buildArtifactGrid();
   renderEquipPricePage();
   renderBonusPage();
   renderBuildPage();
@@ -171,8 +185,15 @@ function setPrice(material, tier, ench, val){
   STATE.prices[priceKey(material,tier,ench)] = val;
   saveState();
 }
-function getArtifactPrice(tier){
-  return Number(STATE.artifactPrices['T'+tier] || 0);
+function artifactPriceKey(itemId, tier){
+  return `${itemId}_T${tier}`;
+}
+function getArtifactPrice(itemId, tier){
+  return Number(STATE.artifactPrices[artifactPriceKey(itemId, tier)] || 0);
+}
+function setArtifactPrice(itemId, tier, val){
+  STATE.artifactPrices[artifactPriceKey(itemId, tier)] = val;
+  saveState();
 }
 function sellKey(itemId, tier, ench){
   return `${itemId}_T${tier}_${ench}`;
@@ -239,7 +260,7 @@ function computeItemCost(item, tier, ench){
   const netMaterialCost = grossMaterialCost - returnedValue;
 
   const artifactQty = Number(m.artifact)||0;
-  const artifactCost = artifactQty * getArtifactPrice(tier); // アーティファクトは還元対象外
+  const artifactCost = artifactQty * getArtifactPrice(item.id, tier); // アーティファクトは還元対象外・装備ごとに単価が異なる
 
   const stationFee = Number(s.stationFee)||0;
   const grossTotal = grossMaterialCost + artifactCost;               // 還元前の原価
@@ -341,30 +362,6 @@ function rowHtml(matId, tier, ench, label){
     <input type="number" min="0" placeholder="0" data-mat="${matId}" data-tier="${tier}" data-ench="${ench}"></div>`;
 }
 
-function buildArtifactGrid(){
-  const wrap = document.getElementById('artifactGrid');
-  wrap.innerHTML = '';
-  const col = document.createElement('div');
-  col.className = 'pricecol';
-  col.style.maxWidth = '280px';
-  let html = `<h5>アーティファクト欠片</h5>`;
-  TIERS4to8.forEach(t=>{
-    html += `<div class="prow"><label>T${t}</label>
-      <input type="number" min="0" placeholder="0" data-artifact-tier="${t}"></div>`;
-  });
-  col.innerHTML = html;
-  wrap.appendChild(col);
-
-  wrap.querySelectorAll('input[data-artifact-tier]').forEach(inp=>{
-    inp.value = getArtifactPrice(inp.dataset.artifactTier) || '';
-    inp.addEventListener('input', ()=>{
-      STATE.artifactPrices['T'+inp.dataset.artifactTier] = Number(inp.value)||0;
-      saveState();
-      updateTopProfit();
-    });
-  });
-}
-
 /* =======================================================================
    PAGE 1-C: 装備売値 — カテゴリ→種類(画像)→価格グリッド、1項目だけ開く
 ======================================================================= */
@@ -436,12 +433,20 @@ function renderEquipGrid(panelWrap, g){
     const col = document.createElement('div');
     col.className = 'pricecol equipcol';
     let html = `<h5><img class="colthumb" src="${item.file}" alt="">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}</h5>`;
+    html += `<div class="prow subtle" style="padding-top:6px;"><label style="font-weight:700;color:var(--text-faint);">売値</label></div>`;
     TIERS4to8.forEach(t=>{
       ENCH.forEach(e=>{
         html += `<div class="prow"><label>T${t}.${e}</label>
           <input type="number" min="0" placeholder="0" data-item="${item.id}" data-tier="${t}" data-ench="${e}"></div>`;
       });
     });
+    if(isArtifactItem(item)){
+      html += `<div class="prow subtle artifact-subhead"><label>アーティファクト欠片単価</label></div>`;
+      TIERS4to8.forEach(t=>{
+        html += `<div class="prow"><label>T${t}</label>
+          <input type="number" min="0" placeholder="0" class="artifact-input" data-artifact-item="${item.id}" data-artifact-tier="${t}"></div>`;
+      });
+    }
     col.innerHTML = html;
     grid.appendChild(col);
   });
@@ -450,6 +455,14 @@ function renderEquipGrid(panelWrap, g){
     inp.value = getSellPrice(inp.dataset.item, inp.dataset.tier, inp.dataset.ench) || '';
     inp.addEventListener('input', ()=>{
       setSellPrice(inp.dataset.item, Number(inp.dataset.tier), Number(inp.dataset.ench), Number(inp.value)||0);
+      updateTopProfit();
+    });
+  });
+
+  grid.querySelectorAll('input[data-artifact-item]').forEach(inp=>{
+    inp.value = getArtifactPrice(inp.dataset.artifactItem, inp.dataset.artifactTier) || '';
+    inp.addEventListener('input', ()=>{
+      setArtifactPrice(inp.dataset.artifactItem, Number(inp.dataset.artifactTier), Number(inp.value)||0);
       updateTopProfit();
     });
   });
@@ -903,7 +916,6 @@ function updateTopProfit(){
    Init
 ======================================================================= */
 buildRefinedGrid();
-buildArtifactGrid();
 renderEquipPricePage();
 renderBonusPage();
 renderBuildPage();
