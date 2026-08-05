@@ -51,7 +51,7 @@ function isArtifactItem(item){
 /* ---------------------------------------------------------------------
    Persistent state (localStorage)
 --------------------------------------------------------------------- */
-const LS_KEY = 'albion_calc_state_v3';
+const LS_KEY = 'albion_calc_state_v4';
 
 function defaultSettings(){
   return {
@@ -67,7 +67,7 @@ function defaultState(){
     prices:{},          // prices["plank_T4_1"] = 1234
     artifactPrices:{},  // artifactPrices["T6"] = 5000
     sellPrices:{},      // sellPrices["itemId_T4_0"] = 45000
-    bonusItems:{},       // bonusItems["itemId"] = 10 | 20  （その日の日替わり生産ボーナス）
+    bonusSubtypes:{},    // bonusSubtypes["weapon::sword"] = 10 | 20 （その日の日替わり生産ボーナスは"武器種"単位で付与される）
     settings: defaultSettings(),
     craftList:{},        // craftList["itemId"] = qty
   };
@@ -79,9 +79,9 @@ function loadState(){
     if(raw) return Object.assign(defaultState(), JSON.parse(raw));
   }catch(e){}
 
-  // v2（利益率タブがあった旧バージョン）からの簡易移行
+  // v3（ボーナスをアイテム単位で登録していた旧バージョン）からの移行
   try{
-    const oldRaw = localStorage.getItem('albion_calc_state_v2');
+    const oldRaw = localStorage.getItem('albion_calc_state_v3');
     if(oldRaw){
       const old = JSON.parse(oldRaw);
       const s = defaultState();
@@ -89,15 +89,13 @@ function loadState(){
       s.artifactPrices = old.artifactPrices || {};
       s.sellPrices = old.sellPrices || {};
       s.craftList = old.craftList || {};
-      if(old.settings){
-        s.settings.tier = old.settings.tier || 4;
-        s.settings.ench = old.settings.ench || 0;
-        s.settings.cityBonus = old.settings.cityBonus !== undefined ? old.settings.cityBonus : true;
-        s.settings.focus = !!old.settings.focus;
-        s.settings.stationFee = old.settings.stationFee || 0;
-        s.settings.saleType = old.settings.saleType || 'quick';
-        s.settings.premium = old.settings.premium !== undefined ? old.settings.premium : true;
-        s.settings.setupFeeRate = old.settings.setupFeeRate !== undefined ? old.settings.setupFeeRate : 2.5;
+      if(old.settings) Object.assign(s.settings, old.settings);
+      // 旧: bonusItems["itemId"] = 10|20 → 新: bonusSubtypes["category::subtype"] = 10|20
+      if(old.bonusItems){
+        Object.keys(old.bonusItems).forEach(itemId=>{
+          const it = ITEMS.find(i=>i.id===itemId);
+          if(it) s.bonusSubtypes[it.category+'::'+it.subtype] = old.bonusItems[itemId];
+        });
       }
       return s;
     }
@@ -109,6 +107,51 @@ let STATE = loadState();
 
 function saveState(){
   localStorage.setItem(LS_KEY, JSON.stringify(STATE));
+}
+
+/* ---------------------------------------------------------------------
+   端末をまたいだ利用のためのエクスポート／インポート
+   （サーバーを持たない静的サイトなので、設定をファイルに書き出し／読み込みする方式）
+--------------------------------------------------------------------- */
+function exportState(){
+  const blob = new Blob([JSON.stringify(STATE, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const d = new Date();
+  const stamp = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
+  a.href = url;
+  a.download = `albion_calc_backup_${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function importStateFromFile(file){
+  const reader = new FileReader();
+  reader.onload = (e)=>{
+    try{
+      const data = JSON.parse(e.target.result);
+      if(typeof data !== 'object' || data===null) throw new Error('invalid');
+      STATE = Object.assign(defaultState(), data);
+      saveState();
+      refreshEverything();
+      alert('データを読み込みました。');
+    }catch(err){
+      alert('読み込みに失敗しました。エクスポートしたJSONファイルを選択してください。');
+    }
+  };
+  reader.readAsText(file);
+}
+
+function refreshEverything(){
+  buildRefinedGrid();
+  buildArtifactGrid();
+  renderEquipPricePage();
+  renderBonusPage();
+  renderBuildPage();
+  renderRecoPage();
+  updateTopProfit();
 }
 
 /* ---------------------------------------------------------------------
@@ -141,13 +184,22 @@ function setSellPrice(itemId, tier, ench, val){
   STATE.sellPrices[sellKey(itemId, tier, ench)] = val;
   saveState();
 }
-function getBonus(itemId){
-  return Number(STATE.bonusItems[itemId] || 0); // 0 / 10 / 20
+function subtypeKey(category, subtype){
+  return category + '::' + subtype;
 }
-function setBonus(itemId, val){
-  if(!val){ delete STATE.bonusItems[itemId]; }
-  else STATE.bonusItems[itemId] = val;
+// 日替わり生産ボーナスは「武器種・防具種」単位（例：斧、剣、革靴）で付与されるため、
+// アイテム個別ではなく category::subtype をキーとして登録する
+function getBonusForSubtype(category, subtype){
+  return Number(STATE.bonusSubtypes[subtypeKey(category, subtype)] || 0); // 0 / 10 / 20
+}
+function setBonusForSubtype(category, subtype, val){
+  const key = subtypeKey(category, subtype);
+  if(!val){ delete STATE.bonusSubtypes[key]; }
+  else STATE.bonusSubtypes[key] = val;
   saveState();
+}
+function getBonus(item){
+  return getBonusForSubtype(item.category, item.subtype);
 }
 
 /* ---------------------------------------------------------------------
@@ -163,7 +215,7 @@ function calcRRR(opts, item){
   let bonus = 18; // 常時：王都クラフトステーションの基本ボーナス
   if(opts.cityBonus) bonus += 15;
   if(opts.focus) bonus += 59;
-  if(item) bonus += getBonus(item.id); // 0 / 10 / 20（登録されたアイテムのみ）
+  if(item) bonus += getBonus(item); // 0 / 10 / 20（登録された武器種・防具種のみ）
   const rrr = bonus / (100 + bonus);
   return {rrr, bonus};
 }
@@ -246,14 +298,18 @@ document.getElementById('resetBtn').addEventListener('click', ()=>{
   if(confirm('すべての価格・設定をリセットしますか？')){
     localStorage.removeItem(LS_KEY);
     STATE = defaultState();
-    buildRefinedGrid();
-    buildArtifactGrid();
-    renderEquipPricePage();
-    renderBonusPage();
-    renderBuildPage();
-    renderRecoPage();
-    updateTopProfit();
+    refreshEverything();
   }
+});
+
+document.getElementById('exportBtn').addEventListener('click', exportState);
+document.getElementById('importBtn').addEventListener('click', ()=>{
+  document.getElementById('importFileInput').click();
+});
+document.getElementById('importFileInput').addEventListener('change', (e)=>{
+  const file = e.target.files[0];
+  if(file) importStateFromFile(file);
+  e.target.value = ''; // 同じファイルを連続で選んでも change が発火するように
 });
 
 /* =======================================================================
@@ -400,70 +456,79 @@ function renderEquipGrid(panelWrap, g){
 }
 
 /* =======================================================================
-   PAGE 1-D: ボーナスデー — その日ボーナス対象のアイテムを個別登録
+   PAGE 1-D: ボーナスデー — その日ボーナス対象の「武器種・防具種」を登録
+   （日替わり生産ボーナスは個別アイテムではなく種類単位で付与される）
 ======================================================================= */
-let bonusSearchTerm = '';
+let bonusCategory = 'weapon';
 
 function renderBonusPage(){
-  const active = Object.keys(STATE.bonusItems);
+  // 現在登録中の一覧
+  const activeKeys = Object.keys(STATE.bonusSubtypes);
   const activeWrap = document.getElementById('bonusActiveList');
-  if(active.length===0){
-    activeWrap.innerHTML = `<div class="empty-hint">まだ登録されていません。下の検索から今日のボーナス対象アイテムを探して登録してください。</div>`;
+  if(activeKeys.length===0){
+    activeWrap.innerHTML = `<div class="empty-hint">まだ登録されていません。下からカテゴリ→種類を選んでボーナスを設定してください。</div>`;
   }else{
-    activeWrap.innerHTML = active.map(id=>{
-      const item = ITEMS.find(i=>i.id===id);
-      if(!item) return '';
-      const val = STATE.bonusItems[id];
+    activeWrap.innerHTML = activeKeys.map(key=>{
+      const [cat, sub] = key.split('::');
+      const catLabel = (CATS.find(c=>c.id===cat)||{}).label || cat;
+      const subLabel = SUBTYPE_LABELS[sub] || sub;
+      const sample = ITEMS.find(i=>i.category===cat && i.subtype===sub);
+      const val = STATE.bonusSubtypes[key];
       return `<div class="bonuschip">
-        <img src="${item.file}" alt="">
-        <span>${item.name}</span>
+        ${sample ? `<img src="${sample.file}" alt="">` : ''}
+        <span>${catLabel} / ${subLabel}</span>
         <span class="bonuspct">+${val}%</span>
-        <button type="button" class="tinybtn removebtn" data-id="${id}">解除</button>
+        <button type="button" class="tinybtn removebtn" data-key="${key}">解除</button>
       </div>`;
     }).join('');
     activeWrap.querySelectorAll('.removebtn').forEach(b=>{
-      b.addEventListener('click', ()=>{ setBonus(b.dataset.id, 0); renderBonusPage(); updateTopProfit(); });
-    });
-  }
-
-  const search = document.getElementById('bonusSearch');
-  search.value = bonusSearchTerm;
-  search.oninput = e=>{ bonusSearchTerm = e.target.value.trim().toLowerCase(); renderBonusPage(); };
-
-  const listWrap = document.getElementById('bonusSearchList');
-  if(!bonusSearchTerm){
-    listWrap.innerHTML = `<div class="empty-hint">装備名を検索してボーナス（+10% または +20%）を設定してください。</div>`;
-    return;
-  }
-  const matches = ITEMS.filter(i=>i.name.toLowerCase().includes(bonusSearchTerm)).slice(0,40);
-  if(matches.length===0){
-    listWrap.innerHTML = `<div class="empty-hint">該当する装備が見つかりません</div>`;
-    return;
-  }
-  listWrap.innerHTML = '';
-  matches.forEach(item=>{
-    const cur = getBonus(item.id);
-    const row = document.createElement('div');
-    row.className = 'itemrow';
-    row.innerHTML = `
-      <img src="${item.file}" alt="${item.name}">
-      <div class="irname">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}</div>
-      <div class="bonustoggle">
-        <button type="button" class="bnbtn ${cur===0?'active':''}" data-v="0">なし</button>
-        <button type="button" class="bnbtn ${cur===10?'active':''}" data-v="10">+10%</button>
-        <button type="button" class="bnbtn ${cur===20?'active':''}" data-v="20">+20%</button>
-      </div>
-    `;
-    row.querySelectorAll('.bnbtn').forEach(b=>{
       b.addEventListener('click', ()=>{
-        setBonus(item.id, Number(b.dataset.v));
+        const [cat, sub] = b.dataset.key.split('::');
+        setBonusForSubtype(cat, sub, 0);
         renderBonusPage();
         updateTopProfit();
       });
     });
-    listWrap.appendChild(row);
+  }
+
+  // カテゴリ選択
+  const catRow = document.getElementById('bonusCatRow');
+  catRow.innerHTML = '';
+  CATS.forEach(c=>{
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'equipcatbtn' + (c.id===bonusCategory ? ' active' : '');
+    btn.innerHTML = `<span class="ic">${c.ic}</span>${c.label}`;
+    btn.addEventListener('click', ()=>{ bonusCategory = c.id; renderBonusPage(); });
+    catRow.appendChild(btn);
+  });
+
+  // 種類（武器種・防具種）を画像アイコンで選択 → クリックで なし→+10%→+20%→なし と切り替え
+  const subRow = document.getElementById('bonusSubtypeRow');
+  subRow.innerHTML = '';
+  const order = SUBTYPE_ORDER[bonusCategory] || [null];
+  const groups = order.map(sub=>({
+    sub,
+    label: sub===null ? (CATS.find(c=>c.id===bonusCategory)||{}).label : (SUBTYPE_LABELS[sub]||sub),
+    items: ITEMS.filter(i=>i.category===bonusCategory && i.subtype===sub),
+  })).filter(g=>g.items.length>0);
+
+  groups.forEach(g=>{
+    const cur = getBonusForSubtype(bonusCategory, g.sub);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'subtypeicon bonussubtype' + (cur>0 ? ' active bonus'+cur : '');
+    btn.innerHTML = `<img src="${g.items[0].file}" alt=""><span>${g.label}</span><span class="micount">${cur>0?'+'+cur+'%':'なし'}</span>`;
+    btn.addEventListener('click', ()=>{
+      const next = cur===0 ? 10 : (cur===10 ? 20 : 0); // なし→+10%→+20%→なし
+      setBonusForSubtype(bonusCategory, g.sub, next);
+      renderBonusPage();
+      updateTopProfit();
+    });
+    subRow.appendChild(btn);
   });
 }
+
 
 /* =======================================================================
    共通設定バー（RRR・製造料・売却手数料）— 作成リストで使用
