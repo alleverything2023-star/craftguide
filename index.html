@@ -335,6 +335,9 @@ body{
 }
 .prow input:focus{border-color:var(--gold-soft);}
 .prow.subtle label{color:var(--text-faint);}
+.artifact-subhead{margin-top:8px;padding-top:8px !important;border-top:1px dashed #3a2a12;}
+.artifact-subhead label{color:#c99a4f !important;font-weight:700;font-size:11px;}
+.artifact-input{border-color:#3a2a12 !important;}
 
 .note{
   font-size:11.5px;color:var(--text-faint);background:#11151e;border:1px solid var(--border);
@@ -385,8 +388,7 @@ body{
     </div>
     <div class="subtabs">
       <button class="subtabbtn active" data-sub="refined">精製素材</button>
-      <button class="subtabbtn" data-sub="artifact">アーティファクト</button>
-      <button class="subtabbtn" data-sub="equip">装備売値</button>
+      <button class="subtabbtn" data-sub="equip">装備売値・アーティファクト</button>
       <button class="subtabbtn" data-sub="bonus">ボーナスデー</button>
     </div>
 
@@ -397,16 +399,10 @@ body{
       <div class="pricegrid" id="refinedGrid"></div>
     </div>
 
-    <div class="subpage" id="sub-artifact" style="display:none;">
-      <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
-        「専門化装備（アーティファクト装備）」を作る際に必要なアーティファクト欠片の価格です。ティアごとに入力してください。
-      </p>
-      <div class="pricegrid" id="artifactGrid"></div>
-    </div>
-
     <div class="subpage" id="sub-equip" style="display:none;">
       <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
         カテゴリ→種類を選ぶと、その種類に含まれる装備の売値をT4.0〜T8.4まで一括入力できます（素材と同じ形式）。一度に開けるのは1種類だけです。
+        アーティファクト装備（🏺マーク）は、その装備専用のアーティファクト欠片の単価（T4〜T8）も同じ列の下にまとめて入力できます（欠片の種類・価格は装備ライン毎に異なるためです）。
       </p>
       <div class="equipcatrow" id="equipCatRow"></div>
       <div class="subtyperow" id="equipSubtypeRow"></div>
