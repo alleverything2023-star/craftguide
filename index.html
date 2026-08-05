@@ -210,13 +210,10 @@ body{
 .bonuschip span{font-size:12px;color:var(--text);}
 .bonuspct{color:#f3c98b !important;font-weight:700;}
 .bonuschip .removebtn{padding:3px 9px;font-size:10.5px;}
-.bonustoggle{display:flex;gap:6px;flex-shrink:0;}
-.bnbtn{
-  background:#171c28;border:1px solid var(--border);color:var(--text-dim);
-  padding:6px 12px;border-radius:7px;font-size:11.5px;cursor:pointer;transition:.15s;
-}
-.bnbtn:hover{border-color:var(--gold-soft);}
-.bnbtn.active{background:linear-gradient(135deg,var(--gold),#a97b30);color:#1c1608;border-color:transparent;font-weight:700;}
+.subtypeicon.bonussubtype.bonus10{border-color:#c99a4f;background:#191507;}
+.subtypeicon.bonussubtype.bonus10 .micount{background:#3a2a12;color:#f3c98b;}
+.subtypeicon.bonussubtype.bonus20{border-color:#e0ac54;background:#241a08;box-shadow:0 0 0 1px var(--gold) inset;}
+.subtypeicon.bonussubtype.bonus20 .micount{background:#4a350f;color:#ffd591;font-weight:700;}
 
 /* ===== 作成リスト：詳細な内訳カード ===== */
 .buildrows{display:flex;flex-direction:column;gap:10px;}
@@ -373,6 +370,9 @@ body{
   </div>
   <div class="appbar-right">
     <div class="pill">作成リスト利益 <b id="topProfit">—</b></div>
+    <button class="btn" id="exportBtn" title="設定・価格をJSONファイルとして保存">エクスポート</button>
+    <button class="btn" id="importBtn" title="他の端末で書き出したJSONファイルを読み込む">インポート</button>
+    <input type="file" id="importFileInput" accept="application/json,.json" style="display:none;">
     <button class="btn" id="resetBtn">リセット</button>
   </div>
 </div>
@@ -380,6 +380,9 @@ body{
 <!-- ============ PAGE 1: 原価入力 (材料原価・装備売値・ボーナスデー) ============ -->
 <div class="page active" id="page-cost">
   <div class="main" style="padding:22px 26px;">
+    <div class="note" style="margin-bottom:16px;">
+      データはこの端末のブラウザにのみ自動保存されます。他の端末でも使いたい場合は、右上の「エクスポート」でJSONファイルを保存し、別の端末で「インポート」から読み込んでください。
+    </div>
     <div class="subtabs">
       <button class="subtabbtn active" data-sub="refined">精製素材</button>
       <button class="subtabbtn" data-sub="artifact">アーティファクト</button>
@@ -412,16 +415,16 @@ body{
 
     <div class="subpage" id="sub-bonus" style="display:none;">
       <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
-        日替わり生産ボーナス（+10%または+20%）は、その日選ばれた特定のアイテムにのみ適用されます。ゲーム内のActivitiesメニューで確認し、該当アイテムをここに登録してください。
+        日替わり生産ボーナス（+10%または+20%）は、特定の装備1個ではなく「武器種・防具種」単位（例：斧、剣、革の靴）で付与されます。ゲーム内のActivitiesメニューで確認し、該当する種類をここに登録してください。アイコンをクリックするたびに「なし→+10%→+20%→なし」と切り替わります。
       </p>
       <div class="card">
-        <h3>現在ボーナス登録中のアイテム</h3>
+        <h3>現在ボーナス登録中の種類</h3>
         <div id="bonusActiveList" style="margin-top:10px;"></div>
       </div>
       <div class="card">
-        <h3>アイテムを検索して登録</h3>
-        <div class="searchrow" style="margin-top:10px;"><input type="text" id="bonusSearch" placeholder="装備名で検索…（例: Royal, Knight, Bow）"></div>
-        <div id="bonusSearchList" style="margin-top:10px;"></div>
+        <h3>カテゴリ→種類を選んで登録</h3>
+        <div class="equipcatrow" id="bonusCatRow" style="margin-top:10px;"></div>
+        <div class="subtyperow" id="bonusSubtypeRow"></div>
       </div>
     </div>
   </div>
