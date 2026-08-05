@@ -173,13 +173,44 @@ body{
 }
 .itemrow .irfield input:focus{border-color:var(--gold-soft);}
 .itemrow .addbtn{flex-shrink:0;}
-.itemrow-profit{gap:10px;flex-wrap:wrap;}
-.itemrow-profit .irname{flex-basis:220px;}
-.irstat{display:flex;flex-direction:column;align-items:flex-end;min-width:78px;}
-.irstat .irk{font-size:9.5px;color:var(--text-faint);}
-.irstat .irv{font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums;}
 
-/* ===== Settings bar (shared across 売値/利益率/作成リスト) ===== */
+/* ===== 利益率タブ：アイテムごとのティア別価格アコーディオン ===== */
+.pitem{
+  border:1px solid var(--border);border-radius:8px;margin-bottom:6px;overflow:hidden;background:#11151e;
+}
+.pitem-header{
+  display:flex;align-items:center;gap:12px;padding:8px 12px;cursor:pointer;user-select:none;transition:.15s;
+}
+.pitem-header:hover{background:#171d2a;}
+.pitem-header img{width:28px;height:28px;object-fit:contain;flex-shrink:0;}
+.pitem-header .irname{flex:1;font-size:12.5px;color:var(--text);min-width:0;}
+.pitem-header .pfilled{font-size:10.5px;color:var(--text-faint);background:#1c2230;padding:2px 8px;border-radius:9px;flex-shrink:0;white-space:nowrap;}
+.pitem-header .chev{font-size:11px;color:var(--text-faint);transition:transform .15s;flex-shrink:0;}
+.pitem.collapsed > .pitem-header .chev{transform:rotate(-90deg);}
+.pitem.collapsed > .pitem-body{display:none;}
+.pitem-body{padding:6px 12px 12px;border-top:1px solid var(--border);background:#0e1119;}
+
+.ptable-head, .ptable-row{
+  display:grid;grid-template-columns:64px 1fr 110px 110px 90px;gap:10px;align-items:center;
+  padding:5px 2px;
+}
+.ptable-head{font-size:10.5px;color:var(--text-faint);font-weight:700;padding-top:10px;}
+.ptable-row{font-size:12px;border-top:1px dashed #1e2432;}
+.ptable-row:first-of-type{border-top:none;}
+.ptc-tier{color:var(--text-dim);font-weight:600;}
+.ptinput{
+  width:100%;background:#171c28;border:1px solid var(--border);color:var(--text);
+  padding:5px 8px;border-radius:6px;font-size:12px;outline:none;text-align:right;
+}
+.ptinput:focus{border-color:var(--gold-soft);}
+.ptc-cost{text-align:right;color:var(--text-dim);font-variant-numeric:tabular-nums;}
+.ptc-profit, .ptc-margin{text-align:right;font-weight:700;font-variant-numeric:tabular-nums;color:var(--text-faint);}
+@media(max-width:640px){
+  .ptable-head, .ptable-row{grid-template-columns:50px 1fr 80px;}
+  .ptc-cost{display:none;}
+}
+
+/* ===== Settings bar (shared across 利益率/作成リスト) ===== */
 .settingsbar{padding:14px 18px;margin-bottom:16px;}
 .settingsbar-row{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;}
 .settingsbar .field{margin-bottom:0;}
@@ -294,7 +325,6 @@ body{
   </div>
   <div class="tabbar">
     <button class="tabbtn active" data-page="cost"><span class="dot"></span>原価入力</button>
-    <button class="tabbtn" data-page="sell"><span class="dot"></span>売値</button>
     <button class="tabbtn" data-page="profit"><span class="dot"></span>利益率</button>
     <button class="tabbtn" data-page="build"><span class="dot"></span>作成リスト</button>
   </div>
@@ -328,26 +358,15 @@ body{
   </div>
 </div>
 
-<!-- ============ PAGE 2: 売値 (Sell Price Entry — 全アイテム一括入力) ============ -->
-<div class="page" id="page-sell">
-  <div class="layout">
-    <div class="sidebar"><h4>装備カテゴリ</h4><div id="sellCategoryList"></div></div>
-    <div class="main">
-      <div id="sellSettingsBar"></div>
-      <div class="searchrow"><input type="text" id="sellSearch" placeholder="装備名で検索…（例: Royal, Knight, Bow）"></div>
-      <div id="sellItemList"></div>
-    </div>
-  </div>
-</div>
-
-<!-- ============ PAGE 3: 利益率 (Profit Margin Overview) ============ -->
+<!-- ============ PAGE 2: 利益率 (Per-tier Sell Price + Profit) ============ -->
 <div class="page" id="page-profit">
   <div class="layout">
     <div class="sidebar"><h4>装備カテゴリ</h4><div id="profitCategoryList"></div></div>
-    <div class="main">
+    <div class="main main wide">
       <div id="profitSettingsBar"></div>
       <div class="searchrow"><input type="text" id="profitSearch" placeholder="装備名で検索…（例: Royal, Knight, Bow）"></div>
-      <div id="profitItemList"></div>
+      <div class="note">装備名の行をクリックすると開き、T4.0〜T8.4の各ティアごとに売値を入力できます（素材の価格入力と同じ形式）。原価・利益・利益率もその場で計算されます。</div>
+      <div id="profitItemList" style="margin-top:12px;"></div>
     </div>
   </div>
 </div>
