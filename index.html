@@ -174,43 +174,86 @@ body{
 .itemrow .irfield input:focus{border-color:var(--gold-soft);}
 .itemrow .addbtn{flex-shrink:0;}
 
-/* ===== 利益率タブ：アイテムごとのティア別価格アコーディオン ===== */
-.pitem{
-  border:1px solid var(--border);border-radius:8px;margin-bottom:6px;overflow:hidden;background:#11151e;
+/* ===== 装備売値（原価入力タブ）：カテゴリ行・種類アイコン行・グリッド ===== */
+.equipcatrow{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;}
+.equipcatbtn{
+  display:flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--border);
+  color:var(--text-dim);padding:9px 14px;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;transition:.15s;
 }
-.pitem-header{
-  display:flex;align-items:center;gap:12px;padding:8px 12px;cursor:pointer;user-select:none;transition:.15s;
-}
-.pitem-header:hover{background:#171d2a;}
-.pitem-header img{width:28px;height:28px;object-fit:contain;flex-shrink:0;}
-.pitem-header .irname{flex:1;font-size:12.5px;color:var(--text);min-width:0;}
-.pitem-header .pfilled{font-size:10.5px;color:var(--text-faint);background:#1c2230;padding:2px 8px;border-radius:9px;flex-shrink:0;white-space:nowrap;}
-.pitem-header .chev{font-size:11px;color:var(--text-faint);transition:transform .15s;flex-shrink:0;}
-.pitem.collapsed > .pitem-header .chev{transform:rotate(-90deg);}
-.pitem.collapsed > .pitem-body{display:none;}
-.pitem-body{padding:6px 12px 12px;border-top:1px solid var(--border);background:#0e1119;}
+.equipcatbtn:hover{border-color:var(--gold-soft);color:var(--text);}
+.equipcatbtn.active{background:linear-gradient(90deg,#2a2211,#191e2a);color:var(--gold);border-color:#3a2f16;}
 
-.ptable-head, .ptable-row{
-  display:grid;grid-template-columns:64px 1fr 110px 110px 90px;gap:10px;align-items:center;
-  padding:5px 2px;
+.subtyperow{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;}
+.subtypeicon{
+  display:flex;flex-direction:column;align-items:center;gap:4px;background:var(--panel);
+  border:1px solid var(--border);border-radius:10px;padding:9px 12px;cursor:pointer;transition:.15s;min-width:76px;
 }
-.ptable-head{font-size:10.5px;color:var(--text-faint);font-weight:700;padding-top:10px;}
-.ptable-row{font-size:12px;border-top:1px dashed #1e2432;}
-.ptable-row:first-of-type{border-top:none;}
-.ptc-tier{color:var(--text-dim);font-weight:600;}
-.ptinput{
-  width:100%;background:#171c28;border:1px solid var(--border);color:var(--text);
-  padding:5px 8px;border-radius:6px;font-size:12px;outline:none;text-align:right;
+.subtypeicon:hover{border-color:var(--gold-soft);}
+.subtypeicon.active{border-color:var(--gold);background:#191507;box-shadow:0 0 0 1px var(--gold) inset;}
+.subtypeicon img{width:34px;height:34px;object-fit:contain;}
+.subtypeicon span{font-size:11px;color:var(--text-dim);text-align:center;}
+.subtypeicon.active span{color:var(--gold-soft);}
+.subtypeicon .micount{font-size:9.5px;color:var(--text-faint);background:#1c2230;padding:0 6px;border-radius:8px;}
+
+.equipgridpanel{
+  border:1px solid #3a2f16;border-radius:12px;padding:16px;background:#12100a;margin-bottom:6px;
 }
-.ptinput:focus{border-color:var(--gold-soft);}
-.ptc-cost{text-align:right;color:var(--text-dim);font-variant-numeric:tabular-nums;}
-.ptc-profit, .ptc-margin{text-align:right;font-weight:700;font-variant-numeric:tabular-nums;color:var(--text-faint);}
-@media(max-width:640px){
-  .ptable-head, .ptable-row{grid-template-columns:50px 1fr 80px;}
-  .ptc-cost{display:none;}
+.equipcol h5{display:flex;align-items:center;gap:7px;font-size:11.5px;line-height:1.3;}
+.colthumb{width:20px;height:20px;object-fit:contain;flex-shrink:0;}
+
+/* ===== ボーナスデー（原価入力タブ） ===== */
+.bonuschip{
+  display:inline-flex;align-items:center;gap:8px;background:#171307;border:1px solid #3a2a12;
+  border-radius:20px;padding:5px 8px 5px 6px;margin:0 8px 8px 0;
+}
+.bonuschip img{width:24px;height:24px;object-fit:contain;border-radius:5px;}
+.bonuschip span{font-size:12px;color:var(--text);}
+.bonuspct{color:#f3c98b !important;font-weight:700;}
+.bonuschip .removebtn{padding:3px 9px;font-size:10.5px;}
+.bonustoggle{display:flex;gap:6px;flex-shrink:0;}
+.bnbtn{
+  background:#171c28;border:1px solid var(--border);color:var(--text-dim);
+  padding:6px 12px;border-radius:7px;font-size:11.5px;cursor:pointer;transition:.15s;
+}
+.bnbtn:hover{border-color:var(--gold-soft);}
+.bnbtn.active{background:linear-gradient(135deg,var(--gold),#a97b30);color:#1c1608;border-color:transparent;font-weight:700;}
+
+/* ===== 作成リスト：詳細な内訳カード ===== */
+.buildrows{display:flex;flex-direction:column;gap:10px;}
+.buildrow{border:1px solid var(--border);border-radius:10px;background:#11151e;overflow:hidden;}
+.brhead{display:flex;align-items:center;gap:10px;padding:9px 12px;background:#141821;}
+.brhead img{width:30px;height:30px;object-fit:contain;flex-shrink:0;}
+.brhead .irname{flex:1;font-size:12.5px;min-width:0;}
+.brhead .craftqty{
+  width:56px;background:#0e1119;border:1px solid var(--border);color:var(--text);
+  padding:5px 6px;border-radius:6px;font-size:12.5px;text-align:center;outline:none;
+}
+.brstats{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:0;
+  padding:10px 12px;
+}
+.bstat{padding:4px 8px;border-left:1px dashed #1e2432;}
+.bstat:first-child{border-left:none;}
+.bstat .bk{display:block;font-size:9.5px;color:var(--text-faint);margin-bottom:2px;}
+.bstat .bv{font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--text-dim);}
+.bstat .bv.strong{font-size:13.5px;font-weight:800;color:var(--text);}
+@media(max-width:900px){
+  .brstats{grid-template-columns:repeat(3,1fr);}
+  .bstat{border-left:none;border-top:1px dashed #1e2432;}
 }
 
-/* ===== Settings bar (shared across 利益率/作成リスト) ===== */
+/* ===== おすすめタブ ===== */
+.recorows{display:flex;flex-direction:column;gap:8px;margin-top:10px;}
+.recorow{
+  display:flex;align-items:center;gap:12px;background:#11151e;border:1px solid var(--border);
+  border-radius:10px;padding:8px 12px;flex-wrap:wrap;
+}
+.rerank{width:24px;text-align:center;font-weight:800;color:var(--gold-soft);font-size:13px;flex-shrink:0;}
+.recorow img{width:30px;height:30px;object-fit:contain;flex-shrink:0;}
+.recorow .irname{flex-basis:200px;flex-grow:1;font-size:12.5px;}
+.retier{font-size:10.5px;color:var(--text-faint);margin-left:6px;}
+
+/* ===== Settings bar (作成リストで使用) ===== */
 .settingsbar{padding:14px 18px;margin-bottom:16px;}
 .settingsbar-row{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;}
 .settingsbar .field{margin-bottom:0;}
@@ -325,8 +368,8 @@ body{
   </div>
   <div class="tabbar">
     <button class="tabbtn active" data-page="cost"><span class="dot"></span>原価入力</button>
-    <button class="tabbtn" data-page="profit"><span class="dot"></span>利益率</button>
     <button class="tabbtn" data-page="build"><span class="dot"></span>作成リスト</button>
+    <button class="tabbtn" data-page="reco"><span class="dot"></span>おすすめ</button>
   </div>
   <div class="appbar-right">
     <div class="pill">作成リスト利益 <b id="topProfit">—</b></div>
@@ -334,44 +377,57 @@ body{
   </div>
 </div>
 
-<!-- ============ PAGE 1: 原価入力 (Material Cost Input) ============ -->
+<!-- ============ PAGE 1: 原価入力 (材料原価・装備売値・ボーナスデー) ============ -->
 <div class="page active" id="page-cost">
   <div class="main" style="padding:22px 26px;">
     <div class="subtabs">
       <button class="subtabbtn active" data-sub="refined">精製素材</button>
       <button class="subtabbtn" data-sub="artifact">アーティファクト</button>
+      <button class="subtabbtn" data-sub="equip">装備売値</button>
+      <button class="subtabbtn" data-sub="bonus">ボーナスデー</button>
     </div>
 
-    <div id="sub-refined">
+    <div class="subpage" id="sub-refined">
       <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
         実際に買う価格（silver / 個）を入力してください。ブラウザに自動保存されます。T4〜T8は補正段階（.0〜.4）ごとに入力できます。
       </p>
       <div class="pricegrid" id="refinedGrid"></div>
     </div>
 
-    <div id="sub-artifact" style="display:none;">
+    <div class="subpage" id="sub-artifact" style="display:none;">
       <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
         「専門化装備（アーティファクト装備）」を作る際に必要なアーティファクト欠片の価格です。ティアごとに入力してください。
       </p>
       <div class="pricegrid" id="artifactGrid"></div>
     </div>
-  </div>
-</div>
 
-<!-- ============ PAGE 2: 利益率 (Per-tier Sell Price + Profit) ============ -->
-<div class="page" id="page-profit">
-  <div class="layout">
-    <div class="sidebar"><h4>装備カテゴリ</h4><div id="profitCategoryList"></div></div>
-    <div class="main main wide">
-      <div id="profitSettingsBar"></div>
-      <div class="searchrow"><input type="text" id="profitSearch" placeholder="装備名で検索…（例: Royal, Knight, Bow）"></div>
-      <div class="note">装備名の行をクリックすると開き、T4.0〜T8.4の各ティアごとに売値を入力できます（素材の価格入力と同じ形式）。原価・利益・利益率もその場で計算されます。</div>
-      <div id="profitItemList" style="margin-top:12px;"></div>
+    <div class="subpage" id="sub-equip" style="display:none;">
+      <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
+        カテゴリ→種類を選ぶと、その種類に含まれる装備の売値をT4.0〜T8.4まで一括入力できます（素材と同じ形式）。一度に開けるのは1種類だけです。
+      </p>
+      <div class="equipcatrow" id="equipCatRow"></div>
+      <div class="subtyperow" id="equipSubtypeRow"></div>
+      <div id="equipGridPanel"></div>
+    </div>
+
+    <div class="subpage" id="sub-bonus" style="display:none;">
+      <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
+        日替わり生産ボーナス（+10%または+20%）は、その日選ばれた特定のアイテムにのみ適用されます。ゲーム内のActivitiesメニューで確認し、該当アイテムをここに登録してください。
+      </p>
+      <div class="card">
+        <h3>現在ボーナス登録中のアイテム</h3>
+        <div id="bonusActiveList" style="margin-top:10px;"></div>
+      </div>
+      <div class="card">
+        <h3>アイテムを検索して登録</h3>
+        <div class="searchrow" style="margin-top:10px;"><input type="text" id="bonusSearch" placeholder="装備名で検索…（例: Royal, Knight, Bow）"></div>
+        <div id="bonusSearchList" style="margin-top:10px;"></div>
+      </div>
     </div>
   </div>
 </div>
 
-<!-- ============ PAGE 4: 作成リスト (Build / Craft List) ============ -->
+<!-- ============ PAGE 2: 作成リスト (Build / Craft List) ============ -->
 <div class="page" id="page-build">
   <div class="layout">
     <div class="sidebar"><h4>装備カテゴリ</h4><div id="buildCategoryList"></div></div>
@@ -385,6 +441,13 @@ body{
         <div id="craftListPanel"></div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- ============ PAGE 3: おすすめ (Top Profit Margin Items) ============ -->
+<div class="page" id="page-reco">
+  <div class="main" style="padding:22px 26px;">
+    <div id="recoList"></div>
   </div>
 </div>
 
