@@ -138,13 +138,11 @@ function getArtifactPrice(tier){
 function sellKey(itemId, tier, ench){
   return `${itemId}_T${tier}_${ench}`;
 }
-function getSellPrice(itemId){
-  const s = STATE.settings;
-  return Number(STATE.sellPrices[sellKey(itemId, s.tier, s.ench)] || 0);
+function getSellPrice(itemId, tier, ench){
+  return Number(STATE.sellPrices[sellKey(itemId, tier, ench)] || 0);
 }
-function setSellPrice(itemId, val){
-  const s = STATE.settings;
-  STATE.sellPrices[sellKey(itemId, s.tier, s.ench)] = val;
+function setSellPrice(itemId, tier, ench, val){
+  STATE.sellPrices[sellKey(itemId, tier, ench)] = val;
   saveState();
 }
 
@@ -166,14 +164,14 @@ function calcRRR(opts){
   return {rrr, bonus};
 }
 
-function computeItemCost(item){
+function computeItemCost(item, tier, ench){
   const s = STATE.settings;
   const {rrr, bonus} = calcRRR(s);
   const m = item.materials || {plank:0,steel:0,leather:0,cloth:0,artifact:0};
 
   const breakdown = MATERIALS.map(mat=>{
     const rawQty = Number(m[mat.id])||0;
-    const unitPrice = getPrice(mat.id, s.tier, s.ench);
+    const unitPrice = getPrice(mat.id, tier, ench);
     const effectiveQty = rawQty * (1 - rrr);
     const cost = effectiveQty * unitPrice;
     return {id:mat.id, label:mat.label, rawQty, unitPrice, effectiveQty, cost};
@@ -181,7 +179,7 @@ function computeItemCost(item){
 
   const materialCost = breakdown.reduce((sum,b)=>sum+b.cost, 0);
   const artifactQty = Number(m.artifact)||0;
-  const artifactCost = artifactQty * getArtifactPrice(s.tier);
+  const artifactCost = artifactQty * getArtifactPrice(tier);
   const stationFee = Number(s.stationFee)||0;
   const total = materialCost + artifactCost + stationFee;
 
@@ -198,9 +196,9 @@ function computeNetSell(sellPrice){
   return {taxRate, setupRate, setupFee, tax, net};
 }
 
-function computeProfit(item){
-  const cost = computeItemCost(item);
-  const sellPrice = getSellPrice(item.id);
+function computeProfit(item, tier, ench){
+  const cost = computeItemCost(item, tier, ench);
+  const sellPrice = getSellPrice(item.id, tier, ench);
   const {net, tax, setupFee, taxRate} = computeNetSell(sellPrice);
   const profit = net - cost.total;
   const margin = sellPrice>0 ? (profit/sellPrice*100) : 0;
@@ -217,7 +215,6 @@ document.querySelectorAll('.tabbtn').forEach(btn=>{
     const page = btn.dataset.page;
     document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
     document.getElementById('page-'+page).classList.add('active');
-    if(page==='sell') renderSellPricePage();
     if(page==='profit') renderProfitPage();
     if(page==='build') renderBuildPage();
   });
@@ -311,9 +308,11 @@ function buildArtifactGrid(){
 function renderSettingsBar(container, opts){
   opts = opts || {};
   const s = STATE.settings;
+  const showTierEnch = opts.tierEnch !== false;
   container.innerHTML = `
     <div class="card settingsbar">
       <div class="settingsbar-row">
+        ${showTierEnch ? `
         <div class="field" style="max-width:110px;">
           <label>ティア</label>
           <select id="stTier">
@@ -325,7 +324,7 @@ function renderSettingsBar(container, opts){
           <select id="stEnch">
             ${ENCH.map(e=>`<option value="${e}" ${e==s.ench?'selected':''}>.${e}</option>`).join('')}
           </select>
-        </div>
+        </div>` : ''}
         ${opts.full ? `
         <div class="field" style="max-width:150px;">
           <label>ステーション使用料</label>
@@ -366,13 +365,15 @@ function renderSettingsBar(container, opts){
           </select>
         </div>
         <div class="pill" style="margin-left:auto;">還元率 <b id="stRRR">${(calcRRR(s).rrr*100).toFixed(2)}%</b></div>
-        ` : `<div class="note" style="flex:1;margin:0;">この設定（ティア・補正段階）は他タブと共通です。原価・利益の計算にはさらに「利益率」タブの還元率・手数料設定も使われます。</div>`}
+        ` : ''}
       </div>
     </div>
   `;
 
-  document.getElementById('stTier').addEventListener('change', e=>{ s.tier=Number(e.target.value); saveState(); opts.onChange(); updateTopProfit(); });
-  document.getElementById('stEnch').addEventListener('change', e=>{ s.ench=Number(e.target.value); saveState(); opts.onChange(); updateTopProfit(); });
+  if(showTierEnch){
+    document.getElementById('stTier').addEventListener('change', e=>{ s.tier=Number(e.target.value); saveState(); opts.onChange(); updateTopProfit(); });
+    document.getElementById('stEnch').addEventListener('change', e=>{ s.ench=Number(e.target.value); saveState(); opts.onChange(); updateTopProfit(); });
+  }
 
   if(opts.full){
     document.getElementById('stStationFee').addEventListener('input', e=>{ s.stationFee=Number(e.target.value)||0; saveState(); opts.onChange(); updateTopProfit(); });
@@ -387,12 +388,13 @@ function renderSettingsBar(container, opts){
 
 /* =======================================================================
    グループ化されたアイテムピッカー（種類ごとに折りたたみ）
-   売値 / 利益率 / 作成リスト の3ページで共有するビルダー
+   利益率 / 作成リスト の各ページで共有するビルダー
 ======================================================================= */
 const pickerUIState = {
-  activeCategory: {sell:'head', profit:'head', build:'head'},
-  searchTerm: {sell:'', profit:'', build:''},
-  expandedGroups: {sell:new Set(), profit:new Set(), build:new Set()},
+  activeCategory: {profit:'head', build:'head'},
+  searchTerm: {profit:'', build:''},
+  expandedGroups: {profit:new Set(), build:new Set()},
+  expandedItems: {profit:new Set()}, // items expanded to show the per-tier price table
 };
 
 function groupKey(pageId, category, sub){
@@ -494,63 +496,100 @@ function renderCategorySidebar(pageId, wrap, onSelect){
 }
 
 /* =======================================================================
-   PAGE 2: 売値 — 全アイテムの売値を一括入力
-======================================================================= */
-function renderSellPricePage(){
-  renderSettingsBar(document.getElementById('sellSettingsBar'), {full:false, onChange: renderSellPricePage});
-  renderCategorySidebar('sell', document.getElementById('sellCategoryList'), renderSellPricePage);
-
-  const search = document.getElementById('sellSearch');
-  search.value = pickerUIState.searchTerm.sell;
-  search.oninput = (e)=>{ pickerUIState.searchTerm.sell = e.target.value.trim().toLowerCase(); renderSellPricePage(); };
-
-  renderItemPicker('sell', document.getElementById('sellItemList'), (item)=>{
-    const row = document.createElement('div');
-    row.className = 'itemrow';
-    row.innerHTML = `
-      <img src="${item.file}" alt="${item.name}">
-      <div class="irname">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}</div>
-      <div class="irfield">
-        <input type="number" min="0" placeholder="売値 silver" value="${getSellPrice(item.id)||''}">
-      </div>
-    `;
-    row.querySelector('input').addEventListener('input', e=>{
-      setSellPrice(item.id, Number(e.target.value)||0);
-      updateTopProfit();
-    });
-    return row;
-  });
-}
-
-/* =======================================================================
-   PAGE 3: 利益率 — 各アイテムの原価・利益・利益率一覧
+   PAGE 2: 利益率 — 各アイテムのティア別売値入力 + 原価・利益・利益率
 ======================================================================= */
 function renderProfitPage(){
-  renderSettingsBar(document.getElementById('profitSettingsBar'), {full:true, onChange: renderProfitPage});
+  renderSettingsBar(document.getElementById('profitSettingsBar'), {full:true, tierEnch:false, onChange: renderProfitPage});
   renderCategorySidebar('profit', document.getElementById('profitCategoryList'), renderProfitPage);
 
   const search = document.getElementById('profitSearch');
   search.value = pickerUIState.searchTerm.profit;
   search.oninput = (e)=>{ pickerUIState.searchTerm.profit = e.target.value.trim().toLowerCase(); renderProfitPage(); };
 
-  renderItemPicker('profit', document.getElementById('profitItemList'), (item)=>{
-    const p = computeProfit(item);
-    const row = document.createElement('div');
-    row.className = 'itemrow itemrow-profit';
-    row.innerHTML = `
-      <img src="${item.file}" alt="${item.name}">
-      <div class="irname">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}</div>
-      <div class="irstat"><span class="irk">原価</span><span class="irv">${fmt(p.cost.total)}</span></div>
-      <div class="irstat"><span class="irk">売値</span><span class="irv">${fmt(p.sellPrice)}</span></div>
-      <div class="irstat"><span class="irk">利益</span><span class="irv ${p.profit>=0?'profit-pos':'profit-neg'}">${p.profit>=0?'+':''}${fmt(p.profit)}</span></div>
-      <div class="irstat"><span class="irk">利益率</span><span class="irv ${p.margin>=0?'profit-pos':'profit-neg'}">${p.sellPrice>0 ? p.margin.toFixed(1)+'%' : '—'}</span></div>
-    `;
-    return row;
+  renderItemPicker('profit', document.getElementById('profitItemList'), renderProfitItemRow);
+}
+
+function renderProfitItemRow(item){
+  const expandedItems = pickerUIState.expandedItems.profit;
+  const isOpen = expandedItems.has(item.id);
+
+  let filled = 0;
+  TIERS4to8.forEach(t=>ENCH.forEach(e=>{ if(getSellPrice(item.id,t,e)>0) filled++; }));
+
+  const el = document.createElement('div');
+  el.className = 'pitem' + (isOpen ? '' : ' collapsed');
+
+  const header = document.createElement('div');
+  header.className = 'pitem-header';
+  header.innerHTML = `
+    <img src="${item.file}" alt="${item.name}">
+    <div class="irname">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}</div>
+    <span class="pfilled">${filled}/${TIERS4to8.length*ENCH.length} 入力済み</span>
+    <span class="chev">▾</span>`;
+  header.addEventListener('click', ()=>{
+    if(isOpen) expandedItems.delete(item.id); else expandedItems.add(item.id);
+    renderProfitPage();
   });
+  el.appendChild(header);
+
+  if(isOpen){
+    const body = document.createElement('div');
+    body.className = 'pitem-body';
+
+    let rowsHtml = `<div class="ptable-head"><span>ティア</span><span>売値 (silver)</span><span>原価</span><span>利益</span><span>利益率</span></div>`;
+    TIERS4to8.forEach(t=>{
+      ENCH.forEach(e=>{
+        const cost = computeItemCost(item, t, e);
+        const sp = getSellPrice(item.id, t, e);
+        const {net} = computeNetSell(sp);
+        const profit = net - cost.total;
+        const margin = sp>0 ? (profit/sp*100) : 0;
+        rowsHtml += `
+          <div class="ptable-row" data-tier="${t}" data-ench="${e}">
+            <span class="ptc-tier">T${t}.${e}</span>
+            <span><input type="number" min="0" class="ptinput" data-item="${item.id}" data-tier="${t}" data-ench="${e}" value="${sp||''}" placeholder="0"></span>
+            <span class="ptc-cost">${fmt(cost.total)}</span>
+            <span class="ptc-profit ${sp>0 ? (profit>=0?'profit-pos':'profit-neg') : ''}">${sp>0 ? (profit>=0?'+':'')+fmt(profit) : '—'}</span>
+            <span class="ptc-margin ${sp>0 ? (margin>=0?'profit-pos':'profit-neg') : ''}">${sp>0 ? margin.toFixed(1)+'%' : '—'}</span>
+          </div>`;
+      });
+    });
+    body.innerHTML = rowsHtml;
+    el.appendChild(body);
+
+    body.querySelectorAll('.ptinput').forEach(inp=>{
+      inp.addEventListener('input', e=>{
+        const t = Number(inp.dataset.tier), en = Number(inp.dataset.ench);
+        const sp = Number(e.target.value)||0;
+        setSellPrice(item.id, t, en, sp);
+
+        const cost = computeItemCost(item, t, en);
+        const {net} = computeNetSell(sp);
+        const profit = net - cost.total;
+        const margin = sp>0 ? (profit/sp*100) : 0;
+
+        const row = inp.closest('.ptable-row');
+        const profitEl = row.querySelector('.ptc-profit');
+        const marginEl = row.querySelector('.ptc-margin');
+        profitEl.textContent = sp>0 ? (profit>=0?'+':'')+fmt(profit) : '—';
+        profitEl.className = 'ptc-profit' + (sp>0 ? (profit>=0?' profit-pos':' profit-neg') : '');
+        marginEl.textContent = sp>0 ? margin.toFixed(1)+'%' : '—';
+        marginEl.className = 'ptc-margin' + (sp>0 ? (margin>=0?' profit-pos':' profit-neg') : '');
+
+        // 折りたたみ時の「入力済み」件数バッジを更新
+        const badge = header.querySelector('.pfilled');
+        let f = 0;
+        TIERS4to8.forEach(tt=>ENCH.forEach(ee=>{ if(getSellPrice(item.id,tt,ee)>0) f++; }));
+        badge.textContent = `${f}/${TIERS4to8.length*ENCH.length} 入力済み`;
+      });
+    });
+  }
+
+  return el;
 }
 
 /* =======================================================================
-   PAGE 4: 作成リスト — 作るアイテムを選んで追加、必要素材を集計
+   PAGE 3: 作成リスト — 作るアイテムを選んで追加、必要素材を集計
 ======================================================================= */
 function addToCraftList(itemId){
   STATE.craftList[itemId] = (STATE.craftList[itemId]||0) + 1;
@@ -571,7 +610,7 @@ function removeFromCraftList(itemId){
 }
 
 function renderBuildPage(){
-  renderSettingsBar(document.getElementById('buildSettingsBar'), {full:true, onChange: renderBuildPage});
+  renderSettingsBar(document.getElementById('buildSettingsBar'), {full:true, tierEnch:true, onChange: renderBuildPage});
   renderCategorySidebar('build', document.getElementById('buildCategoryList'), renderBuildPage);
 
   const search = document.getElementById('buildSearch');
@@ -601,6 +640,7 @@ function renderBuildPage(){
 function renderCraftListPanel(){
   const wrap = document.getElementById('craftListPanel');
   const entries = Object.keys(STATE.craftList)
+
     .map(id=>({item: ITEMS.find(i=>i.id===id), qty: STATE.craftList[id]}))
     .filter(e=>e.item && e.qty>0);
 
@@ -613,7 +653,7 @@ function renderCraftListPanel(){
   let grandTotal = 0;
 
   const rows = entries.map(({item, qty})=>{
-    const cost = computeItemCost(item);
+    const cost = computeItemCost(item, STATE.settings.tier, STATE.settings.ench);
     grandTotal += cost.total * qty;
     const m = item.materials;
     MATERIALS.forEach(mat=>{ totals[mat.id] += (Number(m[mat.id])||0) * qty; });
@@ -674,7 +714,7 @@ function updateTopProfit(){
 
   let totalProfit = 0, any = false;
   entries.forEach(({item, qty})=>{
-    const p = computeProfit(item);
+    const p = computeProfit(item, STATE.settings.tier, STATE.settings.ench);
     if(p.sellPrice>0){ totalProfit += p.profit*qty; any = true; }
   });
   if(!any){ el.textContent='—'; return; }
@@ -686,7 +726,6 @@ function updateTopProfit(){
    Init
 ======================================================================= */
 function renderAllPickerPages(){
-  renderSellPricePage();
   renderProfitPage();
   renderBuildPage();
 }
