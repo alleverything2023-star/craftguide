@@ -51,13 +51,12 @@ function isArtifactItem(item){
 /* ---------------------------------------------------------------------
    Persistent state (localStorage)
 --------------------------------------------------------------------- */
-const LS_KEY = 'albion_calc_state_v2';
-const LS_KEY_OLD = 'albion_calc_state_v1';
+const LS_KEY = 'albion_calc_state_v3';
 
 function defaultSettings(){
   return {
-    tier:4, ench:0,
-    cityBonus:true, focus:false, bonusDay:'none', // none/silver/gold
+    tier:4, ench:0,               // 作成リストで実際に作るティア・補正段階
+    cityBonus:true, focus:false,  // 還元率：都市専門ボーナス／フォーカス使用
     stationFee:0,
     saleType:'quick', premium:true, setupFeeRate:2.5,
   };
@@ -65,11 +64,12 @@ function defaultSettings(){
 
 function defaultState(){
   return {
-    prices:{},         // prices["plank_T4_1"] = 1234
-    artifactPrices:{},// artifactPrices["T6"] = 5000
-    settings: defaultSettings(),
+    prices:{},          // prices["plank_T4_1"] = 1234
+    artifactPrices:{},  // artifactPrices["T6"] = 5000
     sellPrices:{},      // sellPrices["itemId_T4_0"] = 45000
-    craftList:{},       // craftList["itemId"] = qty
+    bonusItems:{},       // bonusItems["itemId"] = 10 | 20  （その日の日替わり生産ボーナス）
+    settings: defaultSettings(),
+    craftList:{},        // craftList["itemId"] = qty
   };
 }
 
@@ -79,29 +79,25 @@ function loadState(){
     if(raw) return Object.assign(defaultState(), JSON.parse(raw));
   }catch(e){}
 
-  // migrate from the old single-item calculator (v1) if present
+  // v2（利益率タブがあった旧バージョン）からの簡易移行
   try{
-    const oldRaw = localStorage.getItem(LS_KEY_OLD);
+    const oldRaw = localStorage.getItem('albion_calc_state_v2');
     if(oldRaw){
       const old = JSON.parse(oldRaw);
       const s = defaultState();
       s.prices = old.prices || {};
       s.artifactPrices = old.artifactPrices || {};
-      if(old.recipe){
-        s.settings.tier = old.recipe.tier || 4;
-        s.settings.ench = old.recipe.ench || 0;
-        s.settings.cityBonus = old.recipe.cityBonus !== undefined ? old.recipe.cityBonus : true;
-        s.settings.focus = !!old.recipe.focus;
-        s.settings.bonusDay = old.recipe.bonusDay || 'none';
-        s.settings.stationFee = old.recipe.stationFee || 0;
-      }
-      if(old.sell){
-        s.settings.saleType = old.sell.type === 'order' ? 'order' : 'quick';
-        s.settings.premium = old.sell.premium !== undefined ? old.sell.premium : true;
-        s.settings.setupFeeRate = old.sell.setupFeeRate !== undefined ? old.sell.setupFeeRate : 2.5;
-        if(old.selectedItemId && old.sell.price){
-          s.sellPrices[sellKey(old.selectedItemId, s.settings.tier, s.settings.ench)] = old.sell.price;
-        }
+      s.sellPrices = old.sellPrices || {};
+      s.craftList = old.craftList || {};
+      if(old.settings){
+        s.settings.tier = old.settings.tier || 4;
+        s.settings.ench = old.settings.ench || 0;
+        s.settings.cityBonus = old.settings.cityBonus !== undefined ? old.settings.cityBonus : true;
+        s.settings.focus = !!old.settings.focus;
+        s.settings.stationFee = old.settings.stationFee || 0;
+        s.settings.saleType = old.settings.saleType || 'quick';
+        s.settings.premium = old.settings.premium !== undefined ? old.settings.premium : true;
+        s.settings.setupFeeRate = old.settings.setupFeeRate !== undefined ? old.settings.setupFeeRate : 2.5;
       }
       return s;
     }
@@ -145,45 +141,60 @@ function setSellPrice(itemId, tier, ench, val){
   STATE.sellPrices[sellKey(itemId, tier, ench)] = val;
   saveState();
 }
+function getBonus(itemId){
+  return Number(STATE.bonusItems[itemId] || 0); // 0 / 10 / 20
+}
+function setBonus(itemId, val){
+  if(!val){ delete STATE.bonusItems[itemId]; }
+  else STATE.bonusItems[itemId] = val;
+  saveState();
+}
 
-/* Resource Return Rate formula, based on published Albion Online mechanics
-   (wiki.albiononline.com/wiki/Resource_return_rate + albiononlinehub.com/craft-planner):
-     - base city crafting production bonus:      +18%   -> RRR 15.25%
-     - specialty (bonus-city) crafting bonus:     +15%   -> total 33%  -> RRR 24.81%
-     - Focus usage:                               +59% flat
-     - Daily bonus (2 items/day get extra):       +10% (silver) or +20% (gold)
-   RRR = 1 - 1/(1 + totalBonus/100)
+/* ---------------------------------------------------------------------
+   Resource Return Rate（Albion Online Wiki: Resource return rate に準拠）
+     - 王都クラフトステーションの基本生産ボーナス：       +18%
+     - 専門化（ボーナスシティ）でのクラフトボーナス：      +15%
+     - フォーカス使用：                                    +59%（固定）
+     - 日替わり生産ボーナス：その日選ばれた2アイテムのみ   +10% or +20%
+       （アイテムごとに異なるため、対象アイテムは「原価入力 > ボーナスデー」で個別登録）
+   RRR = bonus / (100 + bonus)
 --------------------------------------------------------------------- */
-function calcRRR(opts){
-  let bonus = 18; // always present at a city crafting station
+function calcRRR(opts, item){
+  let bonus = 18; // 常時：王都クラフトステーションの基本ボーナス
   if(opts.cityBonus) bonus += 15;
   if(opts.focus) bonus += 59;
-  if(opts.bonusDay === 'silver') bonus += 10;
-  if(opts.bonusDay === 'gold') bonus += 20;
-  const rrr = 1 - 1/(1 + bonus/100);
+  if(item) bonus += getBonus(item.id); // 0 / 10 / 20（登録されたアイテムのみ）
+  const rrr = bonus / (100 + bonus);
   return {rrr, bonus};
 }
 
 function computeItemCost(item, tier, ench){
   const s = STATE.settings;
-  const {rrr, bonus} = calcRRR(s);
+  const {rrr, bonus} = calcRRR(s, item);
   const m = item.materials || {plank:0,steel:0,leather:0,cloth:0,artifact:0};
 
   const breakdown = MATERIALS.map(mat=>{
     const rawQty = Number(m[mat.id])||0;
     const unitPrice = getPrice(mat.id, tier, ench);
-    const effectiveQty = rawQty * (1 - rrr);
-    const cost = effectiveQty * unitPrice;
-    return {id:mat.id, label:mat.label, rawQty, unitPrice, effectiveQty, cost};
+    const grossCost = rawQty * unitPrice;         // 還元前の素材コスト
+    const returnedValue = grossCost * rrr;         // 還元される分の金額
+    const netCost = grossCost - returnedValue;      // 実質コスト
+    return {id:mat.id, label:mat.label, rawQty, unitPrice, grossCost, returnedValue, netCost};
   }).filter(b=>b.rawQty>0);
 
-  const materialCost = breakdown.reduce((sum,b)=>sum+b.cost, 0);
-  const artifactQty = Number(m.artifact)||0;
-  const artifactCost = artifactQty * getArtifactPrice(tier);
-  const stationFee = Number(s.stationFee)||0;
-  const total = materialCost + artifactCost + stationFee;
+  const grossMaterialCost = breakdown.reduce((sum,b)=>sum+b.grossCost, 0);
+  const returnedValue = breakdown.reduce((sum,b)=>sum+b.returnedValue, 0);
+  const netMaterialCost = grossMaterialCost - returnedValue;
 
-  return {breakdown, rrr, bonus, materialCost, artifactQty, artifactCost, stationFee, total};
+  const artifactQty = Number(m.artifact)||0;
+  const artifactCost = artifactQty * getArtifactPrice(tier); // アーティファクトは還元対象外
+
+  const stationFee = Number(s.stationFee)||0;
+  const grossTotal = grossMaterialCost + artifactCost;               // 還元前の原価
+  const total = netMaterialCost + artifactCost + stationFee;          // 実質原価合計（製造料込み）
+
+  return {breakdown, rrr, bonus, grossMaterialCost, returnedValue, netMaterialCost,
+           artifactQty, artifactCost, stationFee, grossTotal, total};
 }
 
 function computeNetSell(sellPrice){
@@ -191,18 +202,18 @@ function computeNetSell(sellPrice){
   const taxRate = s.premium ? 4 : 8;
   const setupRate = s.saleType === 'order' ? Number(s.setupFeeRate)||0 : 0;
   const setupFee = sellPrice * (setupRate/100);
-  const tax = sellPrice * (taxRate/100);
-  const net = sellPrice - setupFee - tax;
+  const tax = sellPrice * (taxRate/100) + setupFee;
+  const net = sellPrice - tax;
   return {taxRate, setupRate, setupFee, tax, net};
 }
 
 function computeProfit(item, tier, ench){
   const cost = computeItemCost(item, tier, ench);
   const sellPrice = getSellPrice(item.id, tier, ench);
-  const {net, tax, setupFee, taxRate} = computeNetSell(sellPrice);
+  const {net, tax} = computeNetSell(sellPrice);
   const profit = net - cost.total;
   const margin = sellPrice>0 ? (profit/sellPrice*100) : 0;
-  return {cost, sellPrice, net, tax, setupFee, taxRate, profit, margin};
+  return {cost, sellPrice, net, tax, profit, margin};
 }
 
 /* ---------------------------------------------------------------------
@@ -215,8 +226,8 @@ document.querySelectorAll('.tabbtn').forEach(btn=>{
     const page = btn.dataset.page;
     document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
     document.getElementById('page-'+page).classList.add('active');
-    if(page==='profit') renderProfitPage();
     if(page==='build') renderBuildPage();
+    if(page==='reco') renderRecoPage();
   });
 });
 
@@ -224,25 +235,29 @@ document.querySelectorAll('.subtabbtn').forEach(btn=>{
   btn.addEventListener('click', ()=>{
     document.querySelectorAll('.subtabbtn').forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
-    document.getElementById('sub-refined').style.display = btn.dataset.sub==='refined' ? '' : 'none';
-    document.getElementById('sub-artifact').style.display = btn.dataset.sub==='artifact' ? '' : 'none';
+    document.querySelectorAll('.subpage').forEach(p=>p.style.display='none');
+    document.getElementById('sub-'+btn.dataset.sub).style.display = '';
+    if(btn.dataset.sub==='equip') renderEquipPricePage();
+    if(btn.dataset.sub==='bonus') renderBonusPage();
   });
 });
 
 document.getElementById('resetBtn').addEventListener('click', ()=>{
   if(confirm('すべての価格・設定をリセットしますか？')){
     localStorage.removeItem(LS_KEY);
-    localStorage.removeItem(LS_KEY_OLD);
     STATE = defaultState();
     buildRefinedGrid();
     buildArtifactGrid();
-    renderAllPickerPages();
+    renderEquipPricePage();
+    renderBonusPage();
+    renderBuildPage();
+    renderRecoPage();
     updateTopProfit();
   }
 });
 
 /* =======================================================================
-   PAGE 1: 原価入力 — Refined material price grid
+   PAGE 1-A: 精製素材 price grid
 ======================================================================= */
 function buildRefinedGrid(){
   const wrap = document.getElementById('refinedGrid');
@@ -251,15 +266,8 @@ function buildRefinedGrid(){
     const col = document.createElement('div');
     col.className = 'pricecol';
     let html = `<h5>${mat.label}</h5>`;
-
-    [1,2,3].forEach(t=>{
-      html += rowHtml(mat.id, t, 0, `T${t}`);
-    });
-    TIERS4to8.forEach(t=>{
-      ENCH.forEach(e=>{
-        html += rowHtml(mat.id, t, e, `T${t}.${e}`);
-      });
-    });
+    [1,2,3].forEach(t=> html += rowHtml(mat.id, t, 0, `T${t}`) );
+    TIERS4to8.forEach(t=> ENCH.forEach(e=> html += rowHtml(mat.id, t, e, `T${t}.${e}`) ));
     col.innerHTML = html;
     wrap.appendChild(col);
   });
@@ -302,17 +310,169 @@ function buildArtifactGrid(){
 }
 
 /* =======================================================================
-   共通設定バー（ティア・エンチャント・還元率・売却手数料）
-   売値 / 利益率 / 作成リスト の3ページで共有する
+   PAGE 1-C: 装備売値 — カテゴリ→種類(画像)→価格グリッド、1項目だけ開く
+======================================================================= */
+let equipCategory = 'weapon';
+let equipOpenKey = null; // "category::subtype" -- 一度に1つだけ開く
+
+function renderEquipPricePage(){
+  const catRow = document.getElementById('equipCatRow');
+  catRow.innerHTML = '';
+  CATS.forEach(c=>{
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'equipcatbtn' + (c.id===equipCategory ? ' active' : '');
+    btn.innerHTML = `<span class="ic">${c.ic}</span>${c.label}`;
+    btn.addEventListener('click', ()=>{
+      equipCategory = c.id;
+      equipOpenKey = null;
+      renderEquipPricePage();
+    });
+    catRow.appendChild(btn);
+  });
+
+  const subRow = document.getElementById('equipSubtypeRow');
+  const panelWrap = document.getElementById('equipGridPanel');
+  subRow.innerHTML = '';
+  panelWrap.innerHTML = '';
+
+  const order = SUBTYPE_ORDER[equipCategory] || [null];
+  const groups = order.map(sub=>({
+    sub,
+    label: sub===null ? (CATS.find(c=>c.id===equipCategory)||{}).label : (SUBTYPE_LABELS[sub]||sub),
+    items: ITEMS.filter(i=>i.category===equipCategory && i.subtype===sub),
+  })).filter(g=>g.items.length>0);
+
+  if(groups.length===1 && groups[0].sub===null){
+    // ケープのようにサブタイプが無いカテゴリ：直接グリッドを表示
+    subRow.style.display = 'none';
+    renderEquipGrid(panelWrap, groups[0]);
+    return;
+  }
+  subRow.style.display = '';
+
+  groups.forEach(g=>{
+    const key = equipCategory+'::'+g.sub;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'subtypeicon' + (equipOpenKey===key ? ' active' : '');
+    btn.innerHTML = `<img src="${g.items[0].file}" alt=""><span>${g.label}</span><span class="micount">${g.items.length}</span>`;
+    btn.addEventListener('click', ()=>{
+      equipOpenKey = (equipOpenKey===key) ? null : key;
+      renderEquipPricePage();
+    });
+    subRow.appendChild(btn);
+
+    if(equipOpenKey===key){
+      renderEquipGrid(panelWrap, g);
+    }
+  });
+}
+
+function renderEquipGrid(panelWrap, g){
+  const panel = document.createElement('div');
+  panel.className = 'equipgridpanel';
+  panel.innerHTML = `<div class="pricegrid" id="equipPriceGrid"></div>`;
+  panelWrap.appendChild(panel);
+
+  const grid = panel.querySelector('#equipPriceGrid');
+  g.items.forEach(item=>{
+    const col = document.createElement('div');
+    col.className = 'pricecol equipcol';
+    let html = `<h5><img class="colthumb" src="${item.file}" alt="">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}</h5>`;
+    TIERS4to8.forEach(t=>{
+      ENCH.forEach(e=>{
+        html += `<div class="prow"><label>T${t}.${e}</label>
+          <input type="number" min="0" placeholder="0" data-item="${item.id}" data-tier="${t}" data-ench="${e}"></div>`;
+      });
+    });
+    col.innerHTML = html;
+    grid.appendChild(col);
+  });
+
+  grid.querySelectorAll('input[data-item]').forEach(inp=>{
+    inp.value = getSellPrice(inp.dataset.item, inp.dataset.tier, inp.dataset.ench) || '';
+    inp.addEventListener('input', ()=>{
+      setSellPrice(inp.dataset.item, Number(inp.dataset.tier), Number(inp.dataset.ench), Number(inp.value)||0);
+      updateTopProfit();
+    });
+  });
+}
+
+/* =======================================================================
+   PAGE 1-D: ボーナスデー — その日ボーナス対象のアイテムを個別登録
+======================================================================= */
+let bonusSearchTerm = '';
+
+function renderBonusPage(){
+  const active = Object.keys(STATE.bonusItems);
+  const activeWrap = document.getElementById('bonusActiveList');
+  if(active.length===0){
+    activeWrap.innerHTML = `<div class="empty-hint">まだ登録されていません。下の検索から今日のボーナス対象アイテムを探して登録してください。</div>`;
+  }else{
+    activeWrap.innerHTML = active.map(id=>{
+      const item = ITEMS.find(i=>i.id===id);
+      if(!item) return '';
+      const val = STATE.bonusItems[id];
+      return `<div class="bonuschip">
+        <img src="${item.file}" alt="">
+        <span>${item.name}</span>
+        <span class="bonuspct">+${val}%</span>
+        <button type="button" class="tinybtn removebtn" data-id="${id}">解除</button>
+      </div>`;
+    }).join('');
+    activeWrap.querySelectorAll('.removebtn').forEach(b=>{
+      b.addEventListener('click', ()=>{ setBonus(b.dataset.id, 0); renderBonusPage(); updateTopProfit(); });
+    });
+  }
+
+  const search = document.getElementById('bonusSearch');
+  search.value = bonusSearchTerm;
+  search.oninput = e=>{ bonusSearchTerm = e.target.value.trim().toLowerCase(); renderBonusPage(); };
+
+  const listWrap = document.getElementById('bonusSearchList');
+  if(!bonusSearchTerm){
+    listWrap.innerHTML = `<div class="empty-hint">装備名を検索してボーナス（+10% または +20%）を設定してください。</div>`;
+    return;
+  }
+  const matches = ITEMS.filter(i=>i.name.toLowerCase().includes(bonusSearchTerm)).slice(0,40);
+  if(matches.length===0){
+    listWrap.innerHTML = `<div class="empty-hint">該当する装備が見つかりません</div>`;
+    return;
+  }
+  listWrap.innerHTML = '';
+  matches.forEach(item=>{
+    const cur = getBonus(item.id);
+    const row = document.createElement('div');
+    row.className = 'itemrow';
+    row.innerHTML = `
+      <img src="${item.file}" alt="${item.name}">
+      <div class="irname">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}</div>
+      <div class="bonustoggle">
+        <button type="button" class="bnbtn ${cur===0?'active':''}" data-v="0">なし</button>
+        <button type="button" class="bnbtn ${cur===10?'active':''}" data-v="10">+10%</button>
+        <button type="button" class="bnbtn ${cur===20?'active':''}" data-v="20">+20%</button>
+      </div>
+    `;
+    row.querySelectorAll('.bnbtn').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        setBonus(item.id, Number(b.dataset.v));
+        renderBonusPage();
+        updateTopProfit();
+      });
+    });
+    listWrap.appendChild(row);
+  });
+}
+
+/* =======================================================================
+   共通設定バー（RRR・製造料・売却手数料）— 作成リストで使用
 ======================================================================= */
 function renderSettingsBar(container, opts){
-  opts = opts || {};
   const s = STATE.settings;
-  const showTierEnch = opts.tierEnch !== false;
   container.innerHTML = `
     <div class="card settingsbar">
       <div class="settingsbar-row">
-        ${showTierEnch ? `
         <div class="field" style="max-width:110px;">
           <label>ティア</label>
           <select id="stTier">
@@ -324,8 +484,7 @@ function renderSettingsBar(container, opts){
           <select id="stEnch">
             ${ENCH.map(e=>`<option value="${e}" ${e==s.ench?'selected':''}>.${e}</option>`).join('')}
           </select>
-        </div>` : ''}
-        ${opts.full ? `
+        </div>
         <div class="field" style="max-width:150px;">
           <label>ステーション使用料</label>
           <input type="number" id="stStationFee" min="0" value="${s.stationFee||0}">
@@ -349,55 +508,39 @@ function renderSettingsBar(container, opts){
         <label class="minitoggle">
           <input type="checkbox" id="stCityBonus" ${s.cityBonus?'checked':''}>
           <span class="slider"></span>
-          <span class="mtlabel">ボーナスシティ</span>
+          <span class="mtlabel">ボーナスシティ(+15%)</span>
         </label>
         <label class="minitoggle">
           <input type="checkbox" id="stFocus" ${s.focus?'checked':''}>
           <span class="slider"></span>
-          <span class="mtlabel">フォーカス使用</span>
+          <span class="mtlabel">フォーカス使用(+59%)</span>
         </label>
-        <div class="field" style="max-width:170px;">
-          <label>ボーナスデー</label>
-          <select id="stBonusDay">
-            <option value="none" ${s.bonusDay==='none'?'selected':''}>なし</option>
-            <option value="silver" ${s.bonusDay==='silver'?'selected':''}>シルバーデー +10%</option>
-            <option value="gold" ${s.bonusDay==='gold'?'selected':''}>ゴールドデー +20%</option>
-          </select>
-        </div>
-        <div class="pill" style="margin-left:auto;">還元率 <b id="stRRR">${(calcRRR(s).rrr*100).toFixed(2)}%</b></div>
-        ` : ''}
+        <div class="pill" style="margin-left:auto;">基本還元率 <b id="stRRR">${(calcRRR(s).rrr*100).toFixed(2)}%</b></div>
       </div>
+      <div class="note">日替わりボーナス（+10%/+20%）は「原価入力 &gt; ボーナスデー」で登録した対象アイテムにのみ自動で加算されます。</div>
     </div>
   `;
 
-  if(showTierEnch){
-    document.getElementById('stTier').addEventListener('change', e=>{ s.tier=Number(e.target.value); saveState(); opts.onChange(); updateTopProfit(); });
-    document.getElementById('stEnch').addEventListener('change', e=>{ s.ench=Number(e.target.value); saveState(); opts.onChange(); updateTopProfit(); });
-  }
-
-  if(opts.full){
-    document.getElementById('stStationFee').addEventListener('input', e=>{ s.stationFee=Number(e.target.value)||0; saveState(); opts.onChange(); updateTopProfit(); });
-    document.getElementById('stSaleType').addEventListener('change', e=>{ s.saleType=e.target.value; saveState(); opts.onChange(); updateTopProfit(); });
-    document.getElementById('stSetupFeeRate').addEventListener('input', e=>{ s.setupFeeRate=Number(e.target.value)||0; saveState(); opts.onChange(); updateTopProfit(); });
-    document.getElementById('stPremium').addEventListener('change', e=>{ s.premium=e.target.checked; saveState(); opts.onChange(); updateTopProfit(); });
-    document.getElementById('stCityBonus').addEventListener('change', e=>{ s.cityBonus=e.target.checked; saveState(); opts.onChange(); updateTopProfit(); });
-    document.getElementById('stFocus').addEventListener('change', e=>{ s.focus=e.target.checked; saveState(); opts.onChange(); updateTopProfit(); });
-    document.getElementById('stBonusDay').addEventListener('change', e=>{ s.bonusDay=e.target.value; saveState(); opts.onChange(); updateTopProfit(); });
-  }
+  document.getElementById('stTier').addEventListener('change', e=>{ s.tier=Number(e.target.value); saveState(); opts.onChange(); updateTopProfit(); });
+  document.getElementById('stEnch').addEventListener('change', e=>{ s.ench=Number(e.target.value); saveState(); opts.onChange(); updateTopProfit(); });
+  document.getElementById('stStationFee').addEventListener('input', e=>{ s.stationFee=Number(e.target.value)||0; saveState(); opts.onChange(); updateTopProfit(); });
+  document.getElementById('stSaleType').addEventListener('change', e=>{ s.saleType=e.target.value; saveState(); opts.onChange(); updateTopProfit(); });
+  document.getElementById('stSetupFeeRate').addEventListener('input', e=>{ s.setupFeeRate=Number(e.target.value)||0; saveState(); opts.onChange(); updateTopProfit(); });
+  document.getElementById('stPremium').addEventListener('change', e=>{ s.premium=e.target.checked; saveState(); opts.onChange(); updateTopProfit(); });
+  document.getElementById('stCityBonus').addEventListener('change', e=>{ s.cityBonus=e.target.checked; saveState(); opts.onChange(); updateTopProfit(); });
+  document.getElementById('stFocus').addEventListener('change', e=>{ s.focus=e.target.checked; saveState(); opts.onChange(); updateTopProfit(); });
 }
 
 /* =======================================================================
-   グループ化されたアイテムピッカー（種類ごとに折りたたみ）
-   利益率 / 作成リスト の各ページで共有するビルダー
+   グループ化されたアイテムピッカー（種類ごとに折りたたみ）— 作成リストで使用
 ======================================================================= */
 const pickerUIState = {
-  activeCategory: {profit:'head', build:'head'},
-  searchTerm: {profit:'', build:''},
-  expandedGroups: {profit:new Set(), build:new Set()},
-  expandedItems: {profit:new Set()}, // items expanded to show the per-tier price table
+  activeCategory: {build:'head'},
+  searchTerm: {build:''},
+  expandedGroups: {build:new Set()},
 };
 
-function groupKey(pageId, category, sub){
+function groupKey(category, sub){
   return category + '::' + (sub===null || sub===undefined ? '_all' : sub);
 }
 
@@ -410,10 +553,6 @@ function buildGroups(category, list){
   })).filter(g=>g.items.length>0);
 }
 
-/**
- * pageId: 'sell' | 'profit' | 'build'
- * renderRow(item): returns an HTMLElement for that item's row/card content (page-specific)
- */
 function renderItemPicker(pageId, wrap, renderRow){
   wrap.innerHTML = '';
   const cat = pickerUIState.activeCategory[pageId];
@@ -428,10 +567,7 @@ function renderItemPicker(pageId, wrap, renderRow){
     return;
   }
 
-  const groupCat = term ? null : cat; // 検索時はカテゴリ問わずフラット表示
-  const groups = term
-    ? [{sub:null, label:'検索結果', items:list}]
-    : buildGroups(cat, list);
+  const groups = term ? [{sub:null, label:'検索結果', items:list}] : buildGroups(cat, list);
   const forceOpen = !!term;
 
   const toolbar = document.createElement('div');
@@ -439,19 +575,19 @@ function renderItemPicker(pageId, wrap, renderRow){
   toolbar.innerHTML = `<button type="button" class="tinybtn" data-act="expand">すべて展開</button><button type="button" class="tinybtn" data-act="collapse">すべて折りたたむ</button>`;
   wrap.appendChild(toolbar);
   toolbar.querySelector('[data-act=expand]').addEventListener('click', ()=>{
-    groups.forEach(g=>expanded.add(groupKey(pageId, cat, g.sub)));
+    groups.forEach(g=>expanded.add(groupKey(cat, g.sub)));
     renderItemPicker(pageId, wrap, renderRow);
   });
   toolbar.querySelector('[data-act=collapse]').addEventListener('click', ()=>{
-    groups.forEach(g=>expanded.delete(groupKey(pageId, cat, g.sub)));
+    groups.forEach(g=>expanded.delete(groupKey(cat, g.sub)));
     renderItemPicker(pageId, wrap, renderRow);
   });
 
   groups.forEach(g=>{
-    const key = groupKey(pageId, cat, g.sub);
+    const key = groupKey(cat, g.sub);
     const isOpen = forceOpen || expanded.has(key);
     const label = g.label===null ? (CATS.find(c=>c.id===cat)||{}).label : g.label;
-    const repImg = g.items[0].file; // 代表画像（元データ順で先頭のアイテム）
+    const repImg = g.items[0].file;
 
     const el = document.createElement('div');
     el.className = 'subgroup' + (isOpen ? '' : ' collapsed');
@@ -496,100 +632,7 @@ function renderCategorySidebar(pageId, wrap, onSelect){
 }
 
 /* =======================================================================
-   PAGE 2: 利益率 — 各アイテムのティア別売値入力 + 原価・利益・利益率
-======================================================================= */
-function renderProfitPage(){
-  renderSettingsBar(document.getElementById('profitSettingsBar'), {full:true, tierEnch:false, onChange: renderProfitPage});
-  renderCategorySidebar('profit', document.getElementById('profitCategoryList'), renderProfitPage);
-
-  const search = document.getElementById('profitSearch');
-  search.value = pickerUIState.searchTerm.profit;
-  search.oninput = (e)=>{ pickerUIState.searchTerm.profit = e.target.value.trim().toLowerCase(); renderProfitPage(); };
-
-  renderItemPicker('profit', document.getElementById('profitItemList'), renderProfitItemRow);
-}
-
-function renderProfitItemRow(item){
-  const expandedItems = pickerUIState.expandedItems.profit;
-  const isOpen = expandedItems.has(item.id);
-
-  let filled = 0;
-  TIERS4to8.forEach(t=>ENCH.forEach(e=>{ if(getSellPrice(item.id,t,e)>0) filled++; }));
-
-  const el = document.createElement('div');
-  el.className = 'pitem' + (isOpen ? '' : ' collapsed');
-
-  const header = document.createElement('div');
-  header.className = 'pitem-header';
-  header.innerHTML = `
-    <img src="${item.file}" alt="${item.name}">
-    <div class="irname">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}</div>
-    <span class="pfilled">${filled}/${TIERS4to8.length*ENCH.length} 入力済み</span>
-    <span class="chev">▾</span>`;
-  header.addEventListener('click', ()=>{
-    if(isOpen) expandedItems.delete(item.id); else expandedItems.add(item.id);
-    renderProfitPage();
-  });
-  el.appendChild(header);
-
-  if(isOpen){
-    const body = document.createElement('div');
-    body.className = 'pitem-body';
-
-    let rowsHtml = `<div class="ptable-head"><span>ティア</span><span>売値 (silver)</span><span>原価</span><span>利益</span><span>利益率</span></div>`;
-    TIERS4to8.forEach(t=>{
-      ENCH.forEach(e=>{
-        const cost = computeItemCost(item, t, e);
-        const sp = getSellPrice(item.id, t, e);
-        const {net} = computeNetSell(sp);
-        const profit = net - cost.total;
-        const margin = sp>0 ? (profit/sp*100) : 0;
-        rowsHtml += `
-          <div class="ptable-row" data-tier="${t}" data-ench="${e}">
-            <span class="ptc-tier">T${t}.${e}</span>
-            <span><input type="number" min="0" class="ptinput" data-item="${item.id}" data-tier="${t}" data-ench="${e}" value="${sp||''}" placeholder="0"></span>
-            <span class="ptc-cost">${fmt(cost.total)}</span>
-            <span class="ptc-profit ${sp>0 ? (profit>=0?'profit-pos':'profit-neg') : ''}">${sp>0 ? (profit>=0?'+':'')+fmt(profit) : '—'}</span>
-            <span class="ptc-margin ${sp>0 ? (margin>=0?'profit-pos':'profit-neg') : ''}">${sp>0 ? margin.toFixed(1)+'%' : '—'}</span>
-          </div>`;
-      });
-    });
-    body.innerHTML = rowsHtml;
-    el.appendChild(body);
-
-    body.querySelectorAll('.ptinput').forEach(inp=>{
-      inp.addEventListener('input', e=>{
-        const t = Number(inp.dataset.tier), en = Number(inp.dataset.ench);
-        const sp = Number(e.target.value)||0;
-        setSellPrice(item.id, t, en, sp);
-
-        const cost = computeItemCost(item, t, en);
-        const {net} = computeNetSell(sp);
-        const profit = net - cost.total;
-        const margin = sp>0 ? (profit/sp*100) : 0;
-
-        const row = inp.closest('.ptable-row');
-        const profitEl = row.querySelector('.ptc-profit');
-        const marginEl = row.querySelector('.ptc-margin');
-        profitEl.textContent = sp>0 ? (profit>=0?'+':'')+fmt(profit) : '—';
-        profitEl.className = 'ptc-profit' + (sp>0 ? (profit>=0?' profit-pos':' profit-neg') : '');
-        marginEl.textContent = sp>0 ? margin.toFixed(1)+'%' : '—';
-        marginEl.className = 'ptc-margin' + (sp>0 ? (margin>=0?' profit-pos':' profit-neg') : '');
-
-        // 折りたたみ時の「入力済み」件数バッジを更新
-        const badge = header.querySelector('.pfilled');
-        let f = 0;
-        TIERS4to8.forEach(tt=>ENCH.forEach(ee=>{ if(getSellPrice(item.id,tt,ee)>0) f++; }));
-        badge.textContent = `${f}/${TIERS4to8.length*ENCH.length} 入力済み`;
-      });
-    });
-  }
-
-  return el;
-}
-
-/* =======================================================================
-   PAGE 3: 作成リスト — 作るアイテムを選んで追加、必要素材を集計
+   PAGE 2: 作成リスト — 原価・製造料・還元額・税金・合計・利益・利益率
 ======================================================================= */
 function addToCraftList(itemId){
   STATE.craftList[itemId] = (STATE.craftList[itemId]||0) + 1;
@@ -610,7 +653,7 @@ function removeFromCraftList(itemId){
 }
 
 function renderBuildPage(){
-  renderSettingsBar(document.getElementById('buildSettingsBar'), {full:true, tierEnch:true, onChange: renderBuildPage});
+  renderSettingsBar(document.getElementById('buildSettingsBar'), {onChange: renderBuildPage});
   renderCategorySidebar('build', document.getElementById('buildCategoryList'), renderBuildPage);
 
   const search = document.getElementById('buildSearch');
@@ -639,57 +682,74 @@ function renderBuildPage(){
 
 function renderCraftListPanel(){
   const wrap = document.getElementById('craftListPanel');
+  const s = STATE.settings;
   const entries = Object.keys(STATE.craftList)
-
     .map(id=>({item: ITEMS.find(i=>i.id===id), qty: STATE.craftList[id]}))
     .filter(e=>e.item && e.qty>0);
 
   if(entries.length===0){
-    wrap.innerHTML = `<div class="empty-hint">右のリストから装備を選んで「追加」すると、ここに必要な素材がまとまります</div>`;
+    wrap.innerHTML = `<div class="empty-hint">左のリストから装備を選んで「追加」すると、ここに原価・利益の内訳がまとまります</div>`;
     return;
   }
 
-  const totals = {plank:0, steel:0, leather:0, cloth:0, artifact:0};
-  let grandTotal = 0;
+  const totals = {gross:0, returned:0, station:0, artifact:0, cost:0, sell:0, tax:0, profit:0};
 
   const rows = entries.map(({item, qty})=>{
-    const cost = computeItemCost(item, STATE.settings.tier, STATE.settings.ench);
-    grandTotal += cost.total * qty;
-    const m = item.materials;
-    MATERIALS.forEach(mat=>{ totals[mat.id] += (Number(m[mat.id])||0) * qty; });
-    totals.artifact += (Number(m.artifact)||0) * qty;
+    const c = computeItemCost(item, s.tier, s.ench);
+    const sellPrice = getSellPrice(item.id, s.tier, s.ench);
+    const {net, tax} = computeNetSell(sellPrice);
+    const profit = (net - c.total) * qty;
+    const margin = sellPrice>0 ? ((net-c.total)/sellPrice*100) : 0;
+
+    totals.gross += c.grossTotal*qty;
+    totals.returned += c.returnedValue*qty;
+    totals.station += c.stationFee*qty;
+    totals.artifact += c.artifactCost*qty;
+    totals.cost += c.total*qty;
+    totals.sell += sellPrice*qty;
+    totals.tax += tax*qty;
+    totals.profit += profit;
 
     return `
-      <div class="craftrow">
-        <img src="${item.file}" alt="${item.name}">
-        <div class="irname">${item.name}</div>
-        <input type="number" min="0" class="craftqty" data-id="${item.id}" value="${qty}">
-        <div class="craftcost">${fmt(cost.total*qty)}</div>
-        <button type="button" class="tinybtn removebtn" data-id="${item.id}">削除</button>
+      <div class="buildrow">
+        <div class="brhead">
+          <img src="${item.file}" alt="${item.name}">
+          <div class="irname">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}</div>
+          <input type="number" min="0" class="craftqty" data-id="${item.id}" value="${qty}">
+          <button type="button" class="tinybtn removebtn" data-id="${item.id}">削除</button>
+        </div>
+        <div class="brstats">
+          <div class="bstat"><span class="bk">原価(素材)</span><span class="bv">${fmt(c.grossMaterialCost)}</span></div>
+          <div class="bstat"><span class="bk">還元額</span><span class="bv profit-pos">-${fmt(c.returnedValue)}</span></div>
+          <div class="bstat"><span class="bk">アーティファクト</span><span class="bv">${fmt(c.artifactCost)}</span></div>
+          <div class="bstat"><span class="bk">製造料</span><span class="bv">${fmt(c.stationFee)}</span></div>
+          <div class="bstat"><span class="bk">実質原価計</span><span class="bv strong">${fmt(c.total)}</span></div>
+          <div class="bstat"><span class="bk">売値</span><span class="bv">${fmt(sellPrice)}</span></div>
+          <div class="bstat"><span class="bk">税金・手数料</span><span class="bv">-${fmt(tax)}</span></div>
+          <div class="bstat"><span class="bk">利益（×${qty}）</span><span class="bv ${profit>=0?'profit-pos':'profit-neg'} strong">${profit>=0?'+':''}${fmt(profit)}</span></div>
+          <div class="bstat"><span class="bk">利益率</span><span class="bv ${margin>=0?'profit-pos':'profit-neg'}">${sellPrice>0?margin.toFixed(1)+'%':'—'}</span></div>
+        </div>
       </div>`;
   }).join('');
 
-  const {rrr} = calcRRR(STATE.settings);
-  const matRows = MATERIALS.map(mat=>{
-    const raw = totals[mat.id];
-    if(raw<=0) return '';
-    const eff = raw * (1-rrr);
-    return `<div class="srow"><span class="k">${mat.label}</span><span class="v">${fmt(raw)}（還元後 ${eff.toFixed(1)}）</span></div>`;
-  }).join('');
-  const artRow = totals.artifact>0
-    ? `<div class="srow"><span class="k">アーティファクト欠片</span><span class="v">${fmt(totals.artifact)} 個</span></div>`
-    : '';
+  const totalMargin = totals.sell>0 ? (totals.profit/totals.sell*100) : 0;
 
   wrap.innerHTML = `
     <div class="card">
-      <h3>作成リスト（${entries.length}種）</h3>
-      <div class="craftrows">${rows}</div>
+      <h3>作成リスト（${entries.length}種 / T${s.tier}.${s.ench}で計算）</h3>
+      <div class="buildrows">${rows}</div>
     </div>
     <div class="card summary-box">
-      <div class="summary-title">必要素材の合計</div>
-      ${matRows || `<div class="srow"><span class="k">素材データなし</span></div>`}
-      ${artRow}
-      <div class="srow total"><span class="k">合計クラフト原価</span><span class="v">${fmt(grandTotal)}</span></div>
+      <div class="summary-title">合計</div>
+      <div class="srow"><span class="k">素材原価（還元前）</span><span class="v">${fmt(totals.gross-totals.artifact)}</span></div>
+      <div class="srow"><span class="k">還元額</span><span class="v profit-pos">-${fmt(totals.returned)}</span></div>
+      <div class="srow"><span class="k">アーティファクト代</span><span class="v">${fmt(totals.artifact)}</span></div>
+      <div class="srow"><span class="k">製造料</span><span class="v">${fmt(totals.station)}</span></div>
+      <div class="srow"><span class="k">実質原価合計</span><span class="v">${fmt(totals.cost)}</span></div>
+      <div class="srow"><span class="k">売値合計</span><span class="v">${fmt(totals.sell)}</span></div>
+      <div class="srow"><span class="k">税金・出品手数料</span><span class="v">-${fmt(totals.tax)}</span></div>
+      <div class="srow total"><span class="k">合計利益</span><span class="v ${totals.profit>=0?'profit-pos':'profit-neg'}">${totals.profit>=0?'+':''}${fmt(totals.profit)}</span></div>
+      <div class="srow"><span class="k">合計利益率</span><span class="v ${totalMargin>=0?'profit-pos':'profit-neg'}">${totals.sell>0?totalMargin.toFixed(1)+'%':'—'}</span></div>
     </div>
   `;
 
@@ -702,10 +762,62 @@ function renderCraftListPanel(){
 }
 
 /* =======================================================================
+   PAGE 3: おすすめ — 利益率の高いアイテムを提案
+======================================================================= */
+function renderRecoPage(){
+  const wrap = document.getElementById('recoList');
+  const s = STATE.settings;
+
+  const results = [];
+  ITEMS.forEach(item=>{
+    TIERS4to8.forEach(t=>{
+      ENCH.forEach(e=>{
+        const sp = getSellPrice(item.id, t, e);
+        if(sp<=0) return;
+        const c = computeItemCost(item, t, e);
+        const {net} = computeNetSell(sp);
+        const profit = net - c.total;
+        const margin = profit/sp*100;
+        results.push({item, tier:t, ench:e, sellPrice:sp, cost:c.total, profit, margin});
+      });
+    });
+  });
+
+  if(results.length===0){
+    wrap.innerHTML = `<div class="empty-hint">「原価入力 &gt; 装備売値」で売値を入力すると、利益率の高い装備がここに表示されます</div>`;
+    return;
+  }
+
+  results.sort((a,b)=>b.margin-a.margin);
+  const top = results.slice(0,30);
+
+  wrap.innerHTML = `
+    <div class="card">
+      <h3>利益率トップ ${top.length}</h3>
+      <div class="sub">現在入力済みの売値をもとに、利益率が高い順に表示しています（還元率・手数料は共通設定を使用）。</div>
+      <div class="recorows">
+        ${top.map((r,idx)=>`
+          <div class="recorow">
+            <span class="rerank">${idx+1}</span>
+            <img src="${r.item.file}" alt="${r.item.name}">
+            <div class="irname">${r.item.name} <span class="retier">T${r.tier}.${r.ench}</span>${isArtifactItem(r.item)?'<span class="tag-artifact">Artifact</span>':''}</div>
+            <div class="bstat"><span class="bk">原価</span><span class="bv">${fmt(r.cost)}</span></div>
+            <div class="bstat"><span class="bk">売値</span><span class="bv">${fmt(r.sellPrice)}</span></div>
+            <div class="bstat"><span class="bk">利益</span><span class="bv ${r.profit>=0?'profit-pos':'profit-neg'}">${r.profit>=0?'+':''}${fmt(r.profit)}</span></div>
+            <div class="bstat"><span class="bk">利益率</span><span class="bv ${r.margin>=0?'profit-pos':'profit-neg'} strong">${r.margin.toFixed(1)}%</span></div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+/* =======================================================================
    共通：トップバーの概算利益表示（作成リスト合計の利益）
 ======================================================================= */
 function updateTopProfit(){
   const el = document.getElementById('topProfit');
+  const s = STATE.settings;
   const entries = Object.keys(STATE.craftList)
     .map(id=>({item: ITEMS.find(i=>i.id===id), qty: STATE.craftList[id]}))
     .filter(e=>e.item && e.qty>0);
@@ -714,7 +826,7 @@ function updateTopProfit(){
 
   let totalProfit = 0, any = false;
   entries.forEach(({item, qty})=>{
-    const p = computeProfit(item, STATE.settings.tier, STATE.settings.ench);
+    const p = computeProfit(item, s.tier, s.ench);
     if(p.sellPrice>0){ totalProfit += p.profit*qty; any = true; }
   });
   if(!any){ el.textContent='—'; return; }
@@ -725,12 +837,10 @@ function updateTopProfit(){
 /* =======================================================================
    Init
 ======================================================================= */
-function renderAllPickerPages(){
-  renderProfitPage();
-  renderBuildPage();
-}
-
 buildRefinedGrid();
 buildArtifactGrid();
-renderAllPickerPages();
+renderEquipPricePage();
+renderBonusPage();
+renderBuildPage();
+renderRecoPage();
 updateTopProfit();
