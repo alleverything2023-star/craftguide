@@ -51,14 +51,14 @@ function isArtifactItem(item){
 /* ---------------------------------------------------------------------
    Persistent state (localStorage)
 --------------------------------------------------------------------- */
-const LS_KEY = 'albion_calc_state_v5';
+const LS_KEY = 'albion_calc_state_v6';
 
 function defaultSettings(){
   return {
     tier:4, ench:0,               // 作成リストで実際に作るティア・補正段階
     cityBonus:true, focus:false,  // 還元率：都市専門ボーナス／フォーカス使用
     stationFee:0,
-    saleType:'quick', premium:true, setupFeeRate:2.5,
+    saleType:'quick', premium:true,
   };
 }
 
@@ -79,6 +79,36 @@ function loadState(){
     if(raw) return Object.assign(defaultState(), JSON.parse(raw));
   }catch(e){}
 
+  // 旧: craftList["itemId"] = qty（単一ティアのみ）→ 新: craftList["itemId_T{tier}_{ench}"] = {itemId,tier,ench,qty}
+  // （同じ装備を複数ティアで同時に計画できるようにするための変更）
+  function migrateCraftList(oldCraftList, fallbackTier, fallbackEnch){
+    const out = {};
+    if(oldCraftList){
+      Object.keys(oldCraftList).forEach(itemId=>{
+        const qty = Number(oldCraftList[itemId])||0;
+        if(qty<=0) return;
+        out[craftKey(itemId, fallbackTier, fallbackEnch)] = {itemId, tier:fallbackTier, ench:fallbackEnch, qty};
+      });
+    }
+    return out;
+  }
+
+  // v5（アーティファクトを装備ごとに管理し始めたが、作成リストが単一ティアだったバージョン）からの移行
+  try{
+    const oldRaw = localStorage.getItem('albion_calc_state_v5');
+    if(oldRaw){
+      const old = JSON.parse(oldRaw);
+      const s = defaultState();
+      s.prices = old.prices || {};
+      s.artifactPrices = old.artifactPrices || {};
+      s.sellPrices = old.sellPrices || {};
+      s.bonusSubtypes = old.bonusSubtypes || {};
+      if(old.settings) Object.assign(s.settings, old.settings);
+      s.craftList = migrateCraftList(old.craftList, s.settings.tier, s.settings.ench);
+      return s;
+    }
+  }catch(e){}
+
   // v4（アーティファクト価格をティア一律で管理していた旧バージョン）からの移行
   // ※ アーティファクトは装備ごとに種類が違うため金額はそのまま引き継げない。
   //   他のデータ（素材価格・売値・ボーナス設定など）はそのまま引き継ぐ。
@@ -89,9 +119,9 @@ function loadState(){
       const s = defaultState();
       s.prices = old.prices || {};
       s.sellPrices = old.sellPrices || {};
-      s.craftList = old.craftList || {};
       s.bonusSubtypes = old.bonusSubtypes || {};
       if(old.settings) Object.assign(s.settings, old.settings);
+      s.craftList = migrateCraftList(old.craftList, s.settings.tier, s.settings.ench);
       return s;
     }
   }catch(e){}
@@ -104,7 +134,6 @@ function loadState(){
       const s = defaultState();
       s.prices = old.prices || {};
       s.sellPrices = old.sellPrices || {};
-      s.craftList = old.craftList || {};
       if(old.settings) Object.assign(s.settings, old.settings);
       if(old.bonusItems){
         Object.keys(old.bonusItems).forEach(itemId=>{
@@ -112,6 +141,7 @@ function loadState(){
           if(it) s.bonusSubtypes[it.category+'::'+it.subtype] = old.bonusItems[itemId];
         });
       }
+      s.craftList = migrateCraftList(old.craftList, s.settings.tier, s.settings.ench);
       return s;
     }
   }catch(e){}
@@ -270,10 +300,12 @@ function computeItemCost(item, tier, ench){
            artifactQty, artifactCost, stationFee, grossTotal, total};
 }
 
+const SETUP_FEE_RATE = 2.5; // Albion Online公式仕様：出品手数料は常に2.5%固定（売り注文の時のみ発生）
+
 function computeNetSell(sellPrice){
   const s = STATE.settings;
-  const taxRate = s.premium ? 4 : 8;
-  const setupRate = s.saleType === 'order' ? Number(s.setupFeeRate)||0 : 0;
+  const taxRate = s.premium ? 4 : 8; // プレミアムなら4%、非プレミアムなら8%
+  const setupRate = s.saleType === 'order' ? SETUP_FEE_RATE : 0;
   const setupFee = sellPrice * (setupRate/100);
   const tax = sellPrice * (taxRate/100) + setupFee;
   const net = sellPrice - tax;
@@ -551,14 +583,14 @@ function renderSettingsBar(container, opts){
   container.innerHTML = `
     <div class="card settingsbar">
       <div class="settingsbar-row">
-        <div class="field" style="max-width:110px;">
-          <label>ティア</label>
+        <div class="field" style="max-width:120px;">
+          <label>新規追加時ティア</label>
           <select id="stTier">
             ${TIERS4to8.map(t=>`<option value="${t}" ${t==s.tier?'selected':''}>T${t}</option>`).join('')}
           </select>
         </div>
-        <div class="field" style="max-width:110px;">
-          <label>補正段階</label>
+        <div class="field" style="max-width:120px;">
+          <label>新規追加時補正</label>
           <select id="stEnch">
             ${ENCH.map(e=>`<option value="${e}" ${e==s.ench?'selected':''}>.${e}</option>`).join('')}
           </select>
@@ -571,17 +603,13 @@ function renderSettingsBar(container, opts){
           <label>売却方法</label>
           <select id="stSaleType">
             <option value="quick" ${s.saleType==='quick'?'selected':''}>クイック売却</option>
-            <option value="order" ${s.saleType==='order'?'selected':''}>売り注文</option>
+            <option value="order" ${s.saleType==='order'?'selected':''}>売り注文（+出品手数料2.5%固定）</option>
           </select>
-        </div>
-        <div class="field" style="max-width:130px;">
-          <label>出品手数料%</label>
-          <input type="number" id="stSetupFeeRate" min="0" step="0.1" value="${s.setupFeeRate}" ${s.saleType!=='order'?'disabled':''}>
         </div>
         <label class="minitoggle">
           <input type="checkbox" id="stPremium" ${s.premium?'checked':''}>
           <span class="slider"></span>
-          <span class="mtlabel">プレミアム</span>
+          <span class="mtlabel">プレミアム（税4%／なしなら8%）</span>
         </label>
         <label class="minitoggle">
           <input type="checkbox" id="stCityBonus" ${s.cityBonus?'checked':''}>
@@ -595,18 +623,20 @@ function renderSettingsBar(container, opts){
         </label>
         <div class="pill" style="margin-left:auto;">基本還元率 <b id="stRRR">${(calcRRR(s).rrr*100).toFixed(2)}%</b></div>
       </div>
-      <div class="note">日替わりボーナス（+10%/+20%）は「原価入力 &gt; ボーナスデー」で登録した対象アイテムにのみ自動で加算されます。</div>
+      <div class="note">
+        「新規追加時ティア／補正」は、下のリストから<b>新しく追加する</b>装備に使われるデフォルト値です。作成リストに追加済みの各行は、行ごとに個別のティア・補正段階を選べます（複数ティアを同時に計画できます）。<br>
+        日替わりボーナス（+10%/+20%）は「原価入力 &gt; ボーナスデー」で登録した対象の武器種・防具種にのみ自動で加算されます。出品手数料は常に2.5%固定（売り注文の時のみ）、取引税はプレミアムなら4%・なしなら8%です。
+      </div>
     </div>
   `;
 
-  document.getElementById('stTier').addEventListener('change', e=>{ s.tier=Number(e.target.value); saveState(); opts.onChange(); updateTopProfit(); });
-  document.getElementById('stEnch').addEventListener('change', e=>{ s.ench=Number(e.target.value); saveState(); opts.onChange(); updateTopProfit(); });
-  document.getElementById('stStationFee').addEventListener('input', e=>{ s.stationFee=Number(e.target.value)||0; saveState(); opts.onChange(); updateTopProfit(); });
-  document.getElementById('stSaleType').addEventListener('change', e=>{ s.saleType=e.target.value; saveState(); opts.onChange(); updateTopProfit(); });
-  document.getElementById('stSetupFeeRate').addEventListener('input', e=>{ s.setupFeeRate=Number(e.target.value)||0; saveState(); opts.onChange(); updateTopProfit(); });
-  document.getElementById('stPremium').addEventListener('change', e=>{ s.premium=e.target.checked; saveState(); opts.onChange(); updateTopProfit(); });
-  document.getElementById('stCityBonus').addEventListener('change', e=>{ s.cityBonus=e.target.checked; saveState(); opts.onChange(); updateTopProfit(); });
-  document.getElementById('stFocus').addEventListener('change', e=>{ s.focus=e.target.checked; saveState(); opts.onChange(); updateTopProfit(); });
+  document.getElementById('stTier').addEventListener('change', e=>{ s.tier=Number(e.target.value); saveState(); });
+  document.getElementById('stEnch').addEventListener('change', e=>{ s.ench=Number(e.target.value); saveState(); });
+  document.getElementById('stStationFee').addEventListener('change', e=>{ s.stationFee=Number(e.target.value)||0; saveState(); renderCraftListPanel(); updateTopProfit(); });
+  document.getElementById('stSaleType').addEventListener('change', e=>{ s.saleType=e.target.value; saveState(); renderCraftListPanel(); updateTopProfit(); });
+  document.getElementById('stPremium').addEventListener('change', e=>{ s.premium=e.target.checked; saveState(); renderCraftListPanel(); updateTopProfit(); });
+  document.getElementById('stCityBonus').addEventListener('change', e=>{ s.cityBonus=e.target.checked; saveState(); renderSettingsBar(container, opts); renderCraftListPanel(); updateTopProfit(); });
+  document.getElementById('stFocus').addEventListener('change', e=>{ s.focus=e.target.checked; saveState(); renderSettingsBar(container, opts); renderCraftListPanel(); updateTopProfit(); });
 }
 
 /* =======================================================================
@@ -711,23 +741,51 @@ function renderCategorySidebar(pageId, wrap, onSelect){
 
 /* =======================================================================
    PAGE 2: 作成リスト — 原価・製造料・還元額・税金・合計・利益・利益率
+   craftList は itemId+tier+ench をキーにして保存するため、同じ装備でも
+   複数ティアを同時に計画できる（例：T6用とT8用を両方リストに入れる）。
 ======================================================================= */
-function addToCraftList(itemId){
-  STATE.craftList[itemId] = (STATE.craftList[itemId]||0) + 1;
-  saveState();
-  renderBuildPage();
+function craftKey(itemId, tier, ench){
+  return `${itemId}_T${tier}_${ench}`;
 }
-function setCraftQty(itemId, qty){
+
+function addToCraftList(itemId, tier, ench, qty){
+  tier = tier || STATE.settings.tier;
+  ench = ench !== undefined ? ench : STATE.settings.ench;
+  qty = Math.max(1, Number(qty)||1);
+  const key = craftKey(itemId, tier, ench);
+  const existing = STATE.craftList[key];
+  if(existing) existing.qty += qty;
+  else STATE.craftList[key] = {itemId, tier, ench, qty};
+  saveState();
+  renderCraftListPanel();
+  updateTopProfit();
+}
+function setCraftQty(key, qty){
   qty = Math.max(0, Number(qty)||0);
-  if(qty===0){ delete STATE.craftList[itemId]; }
-  else STATE.craftList[itemId] = qty;
+  const entry = STATE.craftList[key];
+  if(!entry) return;
+  if(qty===0){ delete STATE.craftList[key]; }
+  else entry.qty = qty;
   saveState();
-  renderBuildPage();
+  renderCraftListPanel();
+  updateTopProfit();
 }
-function removeFromCraftList(itemId){
-  delete STATE.craftList[itemId];
+function setCraftTierEnch(key, newTier, newEnch){
+  const entry = STATE.craftList[key];
+  if(!entry) return;
+  delete STATE.craftList[key];
+  const newKey = craftKey(entry.itemId, newTier, newEnch);
+  if(STATE.craftList[newKey]) STATE.craftList[newKey].qty += entry.qty;
+  else STATE.craftList[newKey] = {itemId: entry.itemId, tier:newTier, ench:newEnch, qty:entry.qty};
   saveState();
-  renderBuildPage();
+  renderCraftListPanel();
+  updateTopProfit();
+}
+function removeFromCraftList(key){
+  delete STATE.craftList[key];
+  saveState();
+  renderCraftListPanel();
+  updateTopProfit();
 }
 
 function renderBuildPage(){
@@ -739,19 +797,21 @@ function renderBuildPage(){
   search.oninput = (e)=>{ pickerUIState.searchTerm.build = e.target.value.trim().toLowerCase(); renderBuildPage(); };
 
   renderItemPicker('build', document.getElementById('buildItemList'), (item)=>{
-    const qty = STATE.craftList[item.id]||0;
     const row = document.createElement('div');
     row.className = 'itemrow';
     row.innerHTML = `
       <img src="${item.file}" alt="${item.name}">
       <div class="irname">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}</div>
-      <div class="irfield" style="max-width:110px;">
-        <input type="number" min="0" placeholder="0" value="${qty||''}">
+      <div class="irfield" style="max-width:70px;">
+        <input type="number" min="1" placeholder="1" class="addqtyinput">
       </div>
-      <button type="button" class="tinybtn addbtn">${qty>0?'追加(+1)':'リストに追加'}</button>
+      <button type="button" class="tinybtn addbtn">追加</button>
     `;
-    row.querySelector('input').addEventListener('input', e=>setCraftQty(item.id, e.target.value));
-    row.querySelector('.addbtn').addEventListener('click', ()=>addToCraftList(item.id));
+    const qtyInput = row.querySelector('.addqtyinput');
+    row.querySelector('.addbtn').addEventListener('click', ()=>{
+      addToCraftList(item.id, STATE.settings.tier, STATE.settings.ench, qtyInput.value);
+      qtyInput.value = '';
+    });
     return row;
   });
 
@@ -760,10 +820,12 @@ function renderBuildPage(){
 
 function renderCraftListPanel(){
   const wrap = document.getElementById('craftListPanel');
-  const s = STATE.settings;
   const entries = Object.keys(STATE.craftList)
-    .map(id=>({item: ITEMS.find(i=>i.id===id), qty: STATE.craftList[id]}))
-    .filter(e=>e.item && e.qty>0);
+    .map(key=>{
+      const entry = STATE.craftList[key];
+      return {key, entry, item: ITEMS.find(i=>i.id===entry.itemId)};
+    })
+    .filter(e=>e.item && e.entry.qty>0);
 
   if(entries.length===0){
     wrap.innerHTML = `<div class="empty-hint">左のリストから装備を選んで「追加」すると、ここに原価・利益の内訳がまとまります</div>`;
@@ -772,9 +834,10 @@ function renderCraftListPanel(){
 
   const totals = {gross:0, returned:0, station:0, artifact:0, cost:0, sell:0, tax:0, profit:0};
 
-  const rows = entries.map(({item, qty})=>{
-    const c = computeItemCost(item, s.tier, s.ench);
-    const sellPrice = getSellPrice(item.id, s.tier, s.ench);
+  const rows = entries.map(({key, entry, item})=>{
+    const {tier, ench, qty} = entry;
+    const c = computeItemCost(item, tier, ench);
+    const sellPrice = getSellPrice(item.id, tier, ench);
     const {net, tax} = computeNetSell(sellPrice);
     const profit = (net - c.total) * qty;
     const margin = sellPrice>0 ? ((net-c.total)/sellPrice*100) : 0;
@@ -793,8 +856,14 @@ function renderCraftListPanel(){
         <div class="brhead">
           <img src="${item.file}" alt="${item.name}">
           <div class="irname">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}</div>
-          <input type="number" min="0" class="craftqty" data-id="${item.id}" value="${qty}">
-          <button type="button" class="tinybtn removebtn" data-id="${item.id}">削除</button>
+          <select class="crafttier" data-key="${key}">
+            ${TIERS4to8.map(t=>`<option value="${t}" ${t===tier?'selected':''}>T${t}</option>`).join('')}
+          </select>
+          <select class="craftench" data-key="${key}">
+            ${ENCH.map(e=>`<option value="${e}" ${e===ench?'selected':''}>.${e}</option>`).join('')}
+          </select>
+          <input type="number" min="0" class="craftqty" data-key="${key}" value="${qty}">
+          <button type="button" class="tinybtn removebtn" data-key="${key}">削除</button>
         </div>
         <div class="brstats">
           <div class="bstat"><span class="bk">原価(素材)</span><span class="bv">${fmt(c.grossMaterialCost)}</span></div>
@@ -814,7 +883,8 @@ function renderCraftListPanel(){
 
   wrap.innerHTML = `
     <div class="card">
-      <h3>作成リスト（${entries.length}種 / T${s.tier}.${s.ench}で計算）</h3>
+      <h3>作成リスト（${entries.length}行）</h3>
+      <div class="sub">行ごとにティア・補正段階を個別に選べます。複数ティアを同時に計画できます。</div>
       <div class="buildrows">${rows}</div>
     </div>
     <div class="card summary-box">
@@ -831,11 +901,27 @@ function renderCraftListPanel(){
     </div>
   `;
 
+  // 数量は change（フォーカスが外れた時）で反映：入力のたびに全体を再描画すると
+  // 1文字入力するごとにフォーカスが外れてしまう不具合があったため
   wrap.querySelectorAll('.craftqty').forEach(inp=>{
-    inp.addEventListener('input', e=>setCraftQty(e.target.dataset.id, e.target.value));
+    inp.addEventListener('change', e=>setCraftQty(e.target.dataset.key, e.target.value));
+  });
+  wrap.querySelectorAll('.crafttier').forEach(sel=>{
+    sel.addEventListener('change', e=>{
+      const key = e.target.dataset.key;
+      const enchSel = wrap.querySelector(`.craftench[data-key="${CSS.escape(key)}"]`);
+      setCraftTierEnch(key, Number(e.target.value), Number(enchSel.value));
+    });
+  });
+  wrap.querySelectorAll('.craftench').forEach(sel=>{
+    sel.addEventListener('change', e=>{
+      const key = e.target.dataset.key;
+      const tierSel = wrap.querySelector(`.crafttier[data-key="${CSS.escape(key)}"]`);
+      setCraftTierEnch(key, Number(tierSel.value), Number(e.target.value));
+    });
   });
   wrap.querySelectorAll('.removebtn').forEach(btn=>{
-    btn.addEventListener('click', e=>removeFromCraftList(e.target.dataset.id));
+    btn.addEventListener('click', e=>removeFromCraftList(e.target.dataset.key));
   });
 }
 
@@ -872,7 +958,7 @@ function renderRecoPage(){
   wrap.innerHTML = `
     <div class="card">
       <h3>利益率トップ ${top.length}</h3>
-      <div class="sub">現在入力済みの売値をもとに、利益率が高い順に表示しています（還元率・手数料は共通設定を使用）。</div>
+      <div class="sub">現在入力済みの売値をもとに、利益率が高い順に表示しています（還元率・手数料は共通設定を使用）。個数を指定して「作成リストに追加」できます。</div>
       <div class="recorows">
         ${top.map((r,idx)=>`
           <div class="recorow">
@@ -883,11 +969,24 @@ function renderRecoPage(){
             <div class="bstat"><span class="bk">売値</span><span class="bv">${fmt(r.sellPrice)}</span></div>
             <div class="bstat"><span class="bk">利益</span><span class="bv ${r.profit>=0?'profit-pos':'profit-neg'}">${r.profit>=0?'+':''}${fmt(r.profit)}</span></div>
             <div class="bstat"><span class="bk">利益率</span><span class="bv ${r.margin>=0?'profit-pos':'profit-neg'} strong">${r.margin.toFixed(1)}%</span></div>
+            <div class="irfield" style="max-width:64px;">
+              <input type="number" min="1" placeholder="1" class="recoqty" data-idx="${idx}">
+            </div>
+            <button type="button" class="tinybtn recoaddbtn" data-idx="${idx}">作成リストに追加</button>
           </div>
         `).join('')}
       </div>
     </div>
   `;
+
+  wrap.querySelectorAll('.recoaddbtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const r = top[Number(btn.dataset.idx)];
+      const qtyInput = wrap.querySelector(`.recoqty[data-idx="${btn.dataset.idx}"]`);
+      addToCraftList(r.item.id, r.tier, r.ench, qtyInput.value);
+      qtyInput.value = '';
+    });
+  });
 }
 
 /* =======================================================================
@@ -895,17 +994,19 @@ function renderRecoPage(){
 ======================================================================= */
 function updateTopProfit(){
   const el = document.getElementById('topProfit');
-  const s = STATE.settings;
   const entries = Object.keys(STATE.craftList)
-    .map(id=>({item: ITEMS.find(i=>i.id===id), qty: STATE.craftList[id]}))
-    .filter(e=>e.item && e.qty>0);
+    .map(key=>{
+      const entry = STATE.craftList[key];
+      return {entry, item: ITEMS.find(i=>i.id===entry.itemId)};
+    })
+    .filter(e=>e.item && e.entry.qty>0);
 
   if(entries.length===0){ el.textContent='—'; return; }
 
   let totalProfit = 0, any = false;
-  entries.forEach(({item, qty})=>{
-    const p = computeProfit(item, s.tier, s.ench);
-    if(p.sellPrice>0){ totalProfit += p.profit*qty; any = true; }
+  entries.forEach(({item, entry})=>{
+    const p = computeProfit(item, entry.tier, entry.ench);
+    if(p.sellPrice>0){ totalProfit += p.profit*entry.qty; any = true; }
   });
   if(!any){ el.textContent='—'; return; }
   el.textContent = (totalProfit>=0?'+':'') + fmt(totalProfit) + ' silver';
