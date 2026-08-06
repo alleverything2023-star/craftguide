@@ -258,13 +258,6 @@ body{
 .settingsbar{padding:14px 18px;margin-bottom:16px;}
 .settingsbar-row{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;}
 .settingsbar .field{margin-bottom:0;}
-.stationfeegrid{display:flex;gap:8px;flex-wrap:wrap;}
-.sfcell{display:flex;flex-direction:column;align-items:center;gap:4px;background:#0e1119;border:1px solid var(--border);border-radius:8px;padding:6px 8px;}
-.sfcell span{font-size:10px;color:var(--text-faint);font-weight:700;}
-.sfcell input{
-  width:76px;background:transparent;border:none;color:var(--text);
-  padding:2px 0;font-size:12.5px;text-align:center;outline:none;
-}
 .minitoggle{display:flex;align-items:center;gap:6px;cursor:pointer;padding-bottom:9px;}
 .minitoggle input{display:none;}
 .minitoggle .slider{position:relative;width:34px;height:19px;background:#2b3244;border-radius:20px;transition:.2s;flex-shrink:0;}
@@ -311,6 +304,19 @@ body{
 .srow.total .v{font-size:19px;}
 .profit-pos{color:var(--green);}
 .profit-neg{color:var(--red);}
+
+/* 必要な素材（作成リスト） */
+.matneedrow{display:flex;justify-content:space-between;align-items:center;padding:7px 0;font-size:13px;border-bottom:1px dashed #262c3a;}
+.matneedrow:last-child{border-bottom:none;}
+.matneedrow .mnlabel{color:var(--text-dim);}
+.matneedrow .mnqty{color:var(--text);font-weight:600;margin-left:auto;margin-right:16px;font-variant-numeric:tabular-nums;}
+.matneedrow .mncost{font-weight:700;font-variant-numeric:tabular-nums;color:var(--gold-soft);min-width:80px;text-align:right;}
+.artneeds{display:flex;flex-direction:column;gap:6px;margin-top:12px;padding-top:12px;border-top:1px solid #3a2f16;}
+.artneedrow{display:flex;align-items:center;gap:8px;font-size:12.5px;}
+.artneedrow .artthumb{width:26px;height:26px;object-fit:contain;background:#0e1119;border:1px solid #3a2a12;border-radius:6px;padding:2px;flex-shrink:0;}
+.artneedrow .artmult{color:#f3c98b;font-weight:800;flex-shrink:0;}
+.artneedrow .artname{color:var(--text-dim);flex:1;min-width:0;}
+.artneedrow .artcost{font-weight:700;font-variant-numeric:tabular-nums;color:var(--gold-soft);}
 
 .empty-hint{
   color:var(--text-faint);font-size:13px;text-align:center;padding:60px 20px;
