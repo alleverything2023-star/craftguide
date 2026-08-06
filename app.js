@@ -51,13 +51,12 @@ function isArtifactItem(item){
 /* ---------------------------------------------------------------------
    Persistent state (localStorage)
 --------------------------------------------------------------------- */
-const LS_KEY = 'albion_calc_state_v6';
+const LS_KEY = 'albion_calc_state_v7';
 
 function defaultSettings(){
   return {
     tier:4, ench:0,               // 作成リストで実際に作るティア・補正段階
     cityBonus:true, focus:false,  // 還元率：都市専門ボーナス／フォーカス使用
-    stationFee:0,
     saleType:'quick', premium:true,
   };
 }
@@ -68,8 +67,9 @@ function defaultState(){
     artifactPrices:{},  // artifactPrices["itemId_T6"] = 5000 （アーティファクトは装備ライン毎に種類・価格が異なるため装備ごとに管理）
     sellPrices:{},      // sellPrices["itemId_T4_0"] = 45000
     bonusSubtypes:{},    // bonusSubtypes["weapon::sword"] = 10 | 20 （その日の日替わり生産ボーナスは"武器種"単位で付与される）
+    stationFees:{},      // stationFees["T4"] = 500 （ステーション使用料はティアによって異なるため個別管理）
     settings: defaultSettings(),
-    craftList:{},        // craftList["itemId"] = qty
+    craftList:{},        // craftList["itemId_T{tier}_{ench}"] = {itemId,tier,ench,qty}
   };
 }
 
@@ -93,6 +93,33 @@ function loadState(){
     return out;
   }
 
+  // 旧: settings.stationFee（ティア一律の単一値）→ 新: stationFees["T4"]〜["T8"]（ティアごと）
+  // 引き継ぐ際は、これまでの一律の値を各ティアの初期値としてそのままコピーする
+  function migrateStationFee(oldSettings){
+    const out = {};
+    const flat = Number(oldSettings && oldSettings.stationFee) || 0;
+    if(flat>0) TIERS4to8.forEach(t=> out['T'+t] = flat );
+    return out;
+  }
+
+  // v6（作成リストは複数ティア対応したが、ステーション使用料がティア一律だったバージョン）からの移行
+  try{
+    const oldRaw = localStorage.getItem('albion_calc_state_v6');
+    if(oldRaw){
+      const old = JSON.parse(oldRaw);
+      const s = defaultState();
+      s.prices = old.prices || {};
+      s.artifactPrices = old.artifactPrices || {};
+      s.sellPrices = old.sellPrices || {};
+      s.bonusSubtypes = old.bonusSubtypes || {};
+      s.craftList = old.craftList || {};
+      if(old.settings) Object.assign(s.settings, old.settings);
+      s.stationFees = migrateStationFee(old.settings);
+      delete s.settings.stationFee;
+      return s;
+    }
+  }catch(e){}
+
   // v5（アーティファクトを装備ごとに管理し始めたが、作成リストが単一ティアだったバージョン）からの移行
   try{
     const oldRaw = localStorage.getItem('albion_calc_state_v5');
@@ -105,6 +132,8 @@ function loadState(){
       s.bonusSubtypes = old.bonusSubtypes || {};
       if(old.settings) Object.assign(s.settings, old.settings);
       s.craftList = migrateCraftList(old.craftList, s.settings.tier, s.settings.ench);
+      s.stationFees = migrateStationFee(old.settings);
+      delete s.settings.stationFee;
       return s;
     }
   }catch(e){}
@@ -122,6 +151,8 @@ function loadState(){
       s.bonusSubtypes = old.bonusSubtypes || {};
       if(old.settings) Object.assign(s.settings, old.settings);
       s.craftList = migrateCraftList(old.craftList, s.settings.tier, s.settings.ench);
+      s.stationFees = migrateStationFee(old.settings);
+      delete s.settings.stationFee;
       return s;
     }
   }catch(e){}
@@ -142,6 +173,8 @@ function loadState(){
         });
       }
       s.craftList = migrateCraftList(old.craftList, s.settings.tier, s.settings.ench);
+      s.stationFees = migrateStationFee(old.settings);
+      delete s.settings.stationFee;
       return s;
     }
   }catch(e){}
@@ -225,6 +258,13 @@ function setArtifactPrice(itemId, tier, val){
   STATE.artifactPrices[artifactPriceKey(itemId, tier)] = val;
   saveState();
 }
+function getStationFee(tier){
+  return Number(STATE.stationFees['T'+tier] || 0);
+}
+function setStationFee(tier, val){
+  STATE.stationFees['T'+tier] = val;
+  saveState();
+}
 function sellKey(itemId, tier, ench){
   return `${itemId}_T${tier}_${ench}`;
 }
@@ -292,7 +332,7 @@ function computeItemCost(item, tier, ench){
   const artifactQty = Number(m.artifact)||0;
   const artifactCost = artifactQty * getArtifactPrice(item.id, tier); // アーティファクトは還元対象外・装備ごとに単価が異なる
 
-  const stationFee = Number(s.stationFee)||0;
+  const stationFee = getStationFee(tier); // ステーション使用料はティアによって異なる
   const grossTotal = grossMaterialCost + artifactCost;               // 還元前の原価
   const total = netMaterialCost + artifactCost + stationFee;          // 実質原価合計（製造料込み）
 
@@ -596,10 +636,6 @@ function renderSettingsBar(container, opts){
           </select>
         </div>
         <div class="field" style="max-width:150px;">
-          <label>ステーション使用料</label>
-          <input type="number" id="stStationFee" min="0" value="${s.stationFee||0}">
-        </div>
-        <div class="field" style="max-width:150px;">
           <label>売却方法</label>
           <select id="stSaleType">
             <option value="quick" ${s.saleType==='quick'?'selected':''}>クイック売却</option>
@@ -623,8 +659,19 @@ function renderSettingsBar(container, opts){
         </label>
         <div class="pill" style="margin-left:auto;">基本還元率 <b id="stRRR">${(calcRRR(s).rrr*100).toFixed(2)}%</b></div>
       </div>
+      <div class="field" style="margin-top:4px;">
+        <label>ステーション使用料（ティアごと・silver）</label>
+        <div class="stationfeegrid">
+          ${TIERS4to8.map(t=>`
+            <div class="sfcell">
+              <span>T${t}</span>
+              <input type="number" min="0" placeholder="0" class="stStationFeeTier" data-tier="${t}" value="${getStationFee(t)||''}">
+            </div>
+          `).join('')}
+        </div>
+      </div>
       <div class="note">
-        「新規追加時ティア／補正」は、下のリストから<b>新しく追加する</b>装備に使われるデフォルト値です。作成リストに追加済みの各行は、行ごとに個別のティア・補正段階を選べます（複数ティアを同時に計画できます）。<br>
+        「新規追加時ティア／補正」は、下のリストから<b>新しく追加する</b>装備に使われるデフォルト値です。作成リストに追加済みの各行は、行ごとに個別のティア・補正段階を選べます（複数ティアを同時に計画できます）。ステーション使用料はティアごとに異なるため個別に入力してください。<br>
         日替わりボーナス（+10%/+20%）は「原価入力 &gt; ボーナスデー」で登録した対象の武器種・防具種にのみ自動で加算されます。出品手数料は常に2.5%固定（売り注文の時のみ）、取引税はプレミアムなら4%・なしなら8%です。
       </div>
     </div>
@@ -632,7 +679,13 @@ function renderSettingsBar(container, opts){
 
   document.getElementById('stTier').addEventListener('change', e=>{ s.tier=Number(e.target.value); saveState(); });
   document.getElementById('stEnch').addEventListener('change', e=>{ s.ench=Number(e.target.value); saveState(); });
-  document.getElementById('stStationFee').addEventListener('change', e=>{ s.stationFee=Number(e.target.value)||0; saveState(); renderCraftListPanel(); updateTopProfit(); });
+  container.querySelectorAll('.stStationFeeTier').forEach(inp=>{
+    inp.addEventListener('change', e=>{
+      setStationFee(Number(e.target.dataset.tier), Number(e.target.value)||0);
+      renderCraftListPanel();
+      updateTopProfit();
+    });
+  });
   document.getElementById('stSaleType').addEventListener('change', e=>{ s.saleType=e.target.value; saveState(); renderCraftListPanel(); updateTopProfit(); });
   document.getElementById('stPremium').addEventListener('change', e=>{ s.premium=e.target.checked; saveState(); renderCraftListPanel(); updateTopProfit(); });
   document.getElementById('stCityBonus').addEventListener('change', e=>{ s.cityBonus=e.target.checked; saveState(); renderSettingsBar(container, opts); renderCraftListPanel(); updateTopProfit(); });
