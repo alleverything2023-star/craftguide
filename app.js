@@ -51,7 +51,7 @@ function isArtifactItem(item){
 /* ---------------------------------------------------------------------
    Persistent state (localStorage)
 --------------------------------------------------------------------- */
-const LS_KEY = 'albion_calc_state_v7';
+const LS_KEY = 'albion_calc_state_v8';
 
 function defaultSettings(){
   return {
@@ -67,7 +67,7 @@ function defaultState(){
     artifactPrices:{},  // artifactPrices["itemId_T6"] = 5000 （アーティファクトは装備ライン毎に種類・価格が異なるため装備ごとに管理）
     sellPrices:{},      // sellPrices["itemId_T4_0"] = 45000
     bonusSubtypes:{},    // bonusSubtypes["weapon::sword"] = 10 | 20 （その日の日替わり生産ボーナスは"武器種"単位で付与される）
-    stationFees:{},      // stationFees["T4"] = 500 （ステーション使用料はティアによって異なるため個別管理）
+    stationFeeBase:0,   // ステーション使用料：T4.0時点の基準額。ティア+エンチャントの合計が1上がるごとに倍になる
     settings: defaultSettings(),
     craftList:{},        // craftList["itemId_T{tier}_{ench}"] = {itemId,tier,ench,qty}
   };
@@ -93,14 +93,32 @@ function loadState(){
     return out;
   }
 
-  // 旧: settings.stationFee（ティア一律の単一値）→ 新: stationFees["T4"]〜["T8"]（ティアごと）
-  // 引き継ぐ際は、これまでの一律の値を各ティアの初期値としてそのままコピーする
-  function migrateStationFee(oldSettings){
-    const out = {};
+  // 旧: settings.stationFee（一律）または stationFees["T4"]〜["T8"]（ティアごと）
+  // → 新: stationFeeBase（T4.0基準額、+1レベルごとに倍）
+  // 引き継ぐ際は、旧データにあるT4相当の値をそのまま基準額として使う
+  function migrateStationFeeBase(oldSettings, oldStationFees){
+    if(oldStationFees && Number(oldStationFees['T4'])>0) return Number(oldStationFees['T4']);
     const flat = Number(oldSettings && oldSettings.stationFee) || 0;
-    if(flat>0) TIERS4to8.forEach(t=> out['T'+t] = flat );
-    return out;
+    return flat;
   }
+
+  // v7（ステーション使用料をティアごとの一覧で管理していたバージョン）からの移行
+  try{
+    const oldRaw = localStorage.getItem('albion_calc_state_v7');
+    if(oldRaw){
+      const old = JSON.parse(oldRaw);
+      const s = defaultState();
+      s.prices = old.prices || {};
+      s.artifactPrices = old.artifactPrices || {};
+      s.sellPrices = old.sellPrices || {};
+      s.bonusSubtypes = old.bonusSubtypes || {};
+      s.craftList = old.craftList || {};
+      if(old.settings) Object.assign(s.settings, old.settings);
+      s.stationFeeBase = migrateStationFeeBase(old.settings, old.stationFees);
+      delete s.settings.stationFee;
+      return s;
+    }
+  }catch(e){}
 
   // v6（作成リストは複数ティア対応したが、ステーション使用料がティア一律だったバージョン）からの移行
   try{
@@ -114,7 +132,7 @@ function loadState(){
       s.bonusSubtypes = old.bonusSubtypes || {};
       s.craftList = old.craftList || {};
       if(old.settings) Object.assign(s.settings, old.settings);
-      s.stationFees = migrateStationFee(old.settings);
+      s.stationFeeBase = migrateStationFeeBase(old.settings, null);
       delete s.settings.stationFee;
       return s;
     }
@@ -132,7 +150,7 @@ function loadState(){
       s.bonusSubtypes = old.bonusSubtypes || {};
       if(old.settings) Object.assign(s.settings, old.settings);
       s.craftList = migrateCraftList(old.craftList, s.settings.tier, s.settings.ench);
-      s.stationFees = migrateStationFee(old.settings);
+      s.stationFeeBase = migrateStationFeeBase(old.settings, null);
       delete s.settings.stationFee;
       return s;
     }
@@ -151,7 +169,7 @@ function loadState(){
       s.bonusSubtypes = old.bonusSubtypes || {};
       if(old.settings) Object.assign(s.settings, old.settings);
       s.craftList = migrateCraftList(old.craftList, s.settings.tier, s.settings.ench);
-      s.stationFees = migrateStationFee(old.settings);
+      s.stationFeeBase = migrateStationFeeBase(old.settings, null);
       delete s.settings.stationFee;
       return s;
     }
@@ -173,7 +191,7 @@ function loadState(){
         });
       }
       s.craftList = migrateCraftList(old.craftList, s.settings.tier, s.settings.ench);
-      s.stationFees = migrateStationFee(old.settings);
+      s.stationFeeBase = migrateStationFeeBase(old.settings, null);
       delete s.settings.stationFee;
       return s;
     }
@@ -258,11 +276,17 @@ function setArtifactPrice(itemId, tier, val){
   STATE.artifactPrices[artifactPriceKey(itemId, tier)] = val;
   saveState();
 }
-function getStationFee(tier){
-  return Number(STATE.stationFees['T'+tier] || 0);
+// ステーション使用料：T4.0を基準（レベル0）として、ティア+エンチャントの合計が1上がるごとに倍になる
+// （例：T4.0=base, T4.1=base×2, T5.0=base×2, T5.1=base×4, T8.4=base×2^20）
+function stationFeeLevel(tier, ench){
+  return (Number(tier)+Number(ench)) - 4;
 }
-function setStationFee(tier, val){
-  STATE.stationFees['T'+tier] = val;
+function getStationFee(tier, ench){
+  const level = stationFeeLevel(tier, ench);
+  return (Number(STATE.stationFeeBase)||0) * Math.pow(2, level);
+}
+function setStationFeeBase(val){
+  STATE.stationFeeBase = Number(val)||0;
   saveState();
 }
 function sellKey(itemId, tier, ench){
@@ -332,7 +356,7 @@ function computeItemCost(item, tier, ench){
   const artifactQty = Number(m.artifact)||0;
   const artifactCost = artifactQty * getArtifactPrice(item.id, tier); // アーティファクトは還元対象外・装備ごとに単価が異なる
 
-  const stationFee = getStationFee(tier); // ステーション使用料はティアによって異なる
+  const stationFee = getStationFee(tier, ench); // ティア+エンチャントの合計が1上がるごとに倍
   const grossTotal = grossMaterialCost + artifactCost;               // 還元前の原価
   const total = netMaterialCost + artifactCost + stationFee;          // 実質原価合計（製造料込み）
 
@@ -659,19 +683,13 @@ function renderSettingsBar(container, opts){
         </label>
         <div class="pill" style="margin-left:auto;">基本還元率 <b id="stRRR">${(calcRRR(s).rrr*100).toFixed(2)}%</b></div>
       </div>
-      <div class="field" style="margin-top:4px;">
-        <label>ステーション使用料（ティアごと・silver）</label>
-        <div class="stationfeegrid">
-          ${TIERS4to8.map(t=>`
-            <div class="sfcell">
-              <span>T${t}</span>
-              <input type="number" min="0" placeholder="0" class="stStationFeeTier" data-tier="${t}" value="${getStationFee(t)||''}">
-            </div>
-          `).join('')}
-        </div>
+      <div class="field" style="max-width:220px;margin-top:4px;">
+        <label>ステーション使用料（T4.0時点・silver）</label>
+        <input type="number" id="stStationFeeBase" min="0" placeholder="0" value="${STATE.stationFeeBase||''}">
       </div>
       <div class="note">
-        「新規追加時ティア／補正」は、下のリストから<b>新しく追加する</b>装備に使われるデフォルト値です。作成リストに追加済みの各行は、行ごとに個別のティア・補正段階を選べます（複数ティアを同時に計画できます）。ステーション使用料はティアごとに異なるため個別に入力してください。<br>
+        「新規追加時ティア／補正」は、下のリストから<b>新しく追加する</b>装備に使われるデフォルト値です。作成リストに追加済みの各行は、行ごとに個別のティア・補正段階を選べます（複数ティアを同時に計画できます）。<br>
+        ステーション使用料は「ティア＋補正段階の合計」が1上がるごとに倍になります（T4.0の金額を入力すれば、T4.1〜T8.4は自動計算されます。例：T4.1とT5.0は同額、T4.2とT5.1とT6.0は同額です）。<br>
         日替わりボーナス（+10%/+20%）は「原価入力 &gt; ボーナスデー」で登録した対象の武器種・防具種にのみ自動で加算されます。出品手数料は常に2.5%固定（売り注文の時のみ）、取引税はプレミアムなら4%・なしなら8%です。
       </div>
     </div>
@@ -679,12 +697,10 @@ function renderSettingsBar(container, opts){
 
   document.getElementById('stTier').addEventListener('change', e=>{ s.tier=Number(e.target.value); saveState(); });
   document.getElementById('stEnch').addEventListener('change', e=>{ s.ench=Number(e.target.value); saveState(); });
-  container.querySelectorAll('.stStationFeeTier').forEach(inp=>{
-    inp.addEventListener('change', e=>{
-      setStationFee(Number(e.target.dataset.tier), Number(e.target.value)||0);
-      renderCraftListPanel();
-      updateTopProfit();
-    });
+  document.getElementById('stStationFeeBase').addEventListener('change', e=>{
+    setStationFeeBase(e.target.value);
+    renderCraftListPanel();
+    updateTopProfit();
   });
   document.getElementById('stSaleType').addEventListener('change', e=>{ s.saleType=e.target.value; saveState(); renderCraftListPanel(); updateTopProfit(); });
   document.getElementById('stPremium').addEventListener('change', e=>{ s.premium=e.target.checked; saveState(); renderCraftListPanel(); updateTopProfit(); });
@@ -886,6 +902,9 @@ function renderCraftListPanel(){
   }
 
   const totals = {gross:0, returned:0, station:0, artifact:0, cost:0, sell:0, tax:0, profit:0};
+  const materialTotals = {}; // { plank: {qty, cost}, ... }
+  MATERIALS.forEach(m=> materialTotals[m.id] = {qty:0, cost:0} );
+  const artifactLines = []; // [{item, qty, unitPrice, totalCost}]
 
   const rows = entries.map(({key, entry, item})=>{
     const {tier, ench, qty} = entry;
@@ -903,6 +922,15 @@ function renderCraftListPanel(){
     totals.sell += sellPrice*qty;
     totals.tax += tax*qty;
     totals.profit += profit;
+
+    c.breakdown.forEach(b=>{
+      materialTotals[b.id].qty += b.rawQty*qty;
+      materialTotals[b.id].cost += b.grossCost*qty;
+    });
+    if(c.artifactQty>0){
+      const unitPrice = getArtifactPrice(item.id, tier);
+      artifactLines.push({item, qty: c.artifactQty*qty, unitPrice, totalCost: c.artifactCost*qty});
+    }
 
     return `
       <div class="buildrow">
@@ -934,11 +962,30 @@ function renderCraftListPanel(){
 
   const totalMargin = totals.sell>0 ? (totals.profit/totals.sell*100) : 0;
 
+  const matRowsHtml = MATERIALS.map(m=>{
+    const t = materialTotals[m.id];
+    if(t.qty<=0) return '';
+    return `<div class="matneedrow"><span class="mnlabel">${m.label}</span><span class="mnqty">${fmt(t.qty)} 個</span><span class="mncost">${fmt(t.cost)}</span></div>`;
+  }).join('');
+
+  const artRowsHtml = artifactLines.map(a=>`
+    <div class="artneedrow">
+      <img class="artthumb" src="${a.item.file}" alt="${a.item.name}">
+      <span class="artmult">× ${fmt(a.qty)}</span>
+      <span class="artname">${a.item.name}</span>
+      <span class="artcost">${fmt(a.totalCost)}</span>
+    </div>`).join('');
+
   wrap.innerHTML = `
     <div class="card">
       <h3>作成リスト（${entries.length}行）</h3>
       <div class="sub">行ごとにティア・補正段階を個別に選べます。複数ティアを同時に計画できます。</div>
       <div class="buildrows">${rows}</div>
+    </div>
+    <div class="card summary-box">
+      <div class="summary-title">必要な素材（合計・還元前の購入必要数）</div>
+      ${matRowsHtml || `<div class="srow"><span class="k">素材データなし</span></div>`}
+      ${artRowsHtml ? `<div class="artneeds">${artRowsHtml}</div>` : ''}
     </div>
     <div class="card summary-box">
       <div class="summary-title">合計</div>
