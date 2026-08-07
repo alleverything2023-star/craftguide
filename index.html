@@ -306,12 +306,18 @@ body{
 .profit-neg{color:var(--red);}
 
 /* 必要な素材（作成リスト） */
+.matneedgroup{margin-bottom:14px;}
+.matneedgroup:last-child{margin-bottom:0;}
+.matneedgroup-title{
+  font-size:11px;font-weight:800;color:var(--gold);background:#1c1608;display:inline-block;
+  padding:2px 9px;border-radius:6px;margin-bottom:4px;
+}
 .matneedrow{display:flex;justify-content:space-between;align-items:center;padding:7px 0;font-size:13px;border-bottom:1px dashed #262c3a;}
 .matneedrow:last-child{border-bottom:none;}
 .matneedrow .mnlabel{color:var(--text-dim);}
 .matneedrow .mnqty{color:var(--text);font-weight:600;margin-left:auto;margin-right:16px;font-variant-numeric:tabular-nums;}
 .matneedrow .mncost{font-weight:700;font-variant-numeric:tabular-nums;color:var(--gold-soft);min-width:80px;text-align:right;}
-.artneeds{display:flex;flex-direction:column;gap:6px;margin-top:12px;padding-top:12px;border-top:1px solid #3a2f16;}
+.artneeds{display:flex;flex-direction:column;gap:6px;margin-top:6px;margin-bottom:14px;padding-top:8px;border-top:1px solid #3a2f16;}
 .artneedrow{display:flex;align-items:center;gap:8px;font-size:12.5px;}
 .artneedrow .artthumb{width:26px;height:26px;object-fit:contain;background:#0e1119;border:1px solid #3a2a12;border-radius:6px;padding:2px;flex-shrink:0;}
 .artneedrow .artmult{color:#f3c98b;font-weight:800;flex-shrink:0;}
