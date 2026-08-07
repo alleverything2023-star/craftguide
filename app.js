@@ -49,14 +49,70 @@ function isArtifactItem(item){
 }
 
 /* ---------------------------------------------------------------------
+   ロイヤル都市とボーナス都市（精錬・製作）のマッピング
+   ユーザー提示のマスターデータに準拠。
+--------------------------------------------------------------------- */
+const CITIES = ['Martlock', 'Thetford', 'FortSterling', 'Lymhurst', 'Bridgewatch', 'Caerleon'];
+const CITY_LABELS_JA = {
+  Martlock:'マートロック', Thetford:'セットフォード', FortSterling:'フォートスターリング',
+  Lymhurst:'リムハースト', Bridgewatch:'ブリッジウォッチ', Caerleon:'カエルレオン',
+};
+
+// 精錬ボーナス都市（素材id: MATERIALSのidに対応）
+const REFINE_BONUS_CITY = {
+  steel:   'Thetford',      // 金属インゴット
+  cloth:   'Lymhurst',      // 布
+  leather: 'Martlock',      // 革
+  plank:   'FortSterling',  // 木材
+  // stone（石材）は現状 MATERIALS に無いため未使用。追加時は 'Bridgewatch' を割り当てる。
+};
+
+// 製作ボーナス都市。防具は「素材種::カテゴリ」、武器/オフハンドは「武器種(subtype)」で判定する
+// （plate/leather/clothはhead/chest/footで異なる都市になるため）。
+const CRAFT_BONUS_CITY = {
+  // クロス防具
+  'cloth::head':  'Thetford',      // Cowl
+  'cloth::chest': 'FortSterling',  // Robe
+  'cloth::foot':  'Bridgewatch',   // Sandals
+  // レザー防具
+  'leather::head':  'Lymhurst',    // Hood
+  'leather::chest': 'Thetford',    // Jacket
+  'leather::foot':  'Lymhurst',    // Shoes
+  // プレート防具
+  'plate::head':  'FortSterling',
+  'plate::chest': 'Bridgewatch',
+  'plate::foot':  'Martlock',      // Boots
+  // 武器
+  hammer:'FortSterling', mace:'Thetford', axe:'Martlock', sword:'Lymhurst',
+  crossbow:'Bridgewatch', bow:'Lymhurst', dagger:'Bridgewatch', spear:'FortSterling',
+  quarterstaff:'Martlock', firestaff:'Thetford', naturestaff:'Thetford',
+  arcanestaff:'Lymhurst', holystaff:'FortSterling', froststaff:'Martlock',
+  cursedstaff:'Bridgewatch', shapeshifterstaff:'Caerleon',
+  fist:'Caerleon', // War Gloves
+  // オフハンド（book/torch/shield。horn相当は現データに無し）
+  shield:'Martlock', torch:'Martlock', tome:'Martlock',
+  // cape: マスターデータに記載無し（ボーナス都市なし）
+};
+
+// アイテムのボーナス都市を解決する。防具はhead/chest/footでplate/leather/clothの都市が異なるため
+// "subtype::category" で引き、武器・オフハンドは subtype 単体で引く。該当なし（cape等）は null。
+function getBonusCity(item){
+  if(['head','chest','foot'].includes(item.category)){
+    return CRAFT_BONUS_CITY[`${item.subtype}::${item.category}`] || null;
+  }
+  return CRAFT_BONUS_CITY[item.subtype] || null;
+}
+
+/* ---------------------------------------------------------------------
    Persistent state (localStorage)
 --------------------------------------------------------------------- */
-const LS_KEY = 'albion_calc_state_v8';
+const LS_KEY = 'albion_calc_state_v9';
 
 function defaultSettings(){
   return {
     tier:4, ench:0,               // 作成リストで実際に作るティア・補正段階
-    cityBonus:true, focus:false,  // 還元率：都市専門ボーナス／フォーカス使用
+    craftingCity:'Martlock',      // どの都市のステーションでクラフトするか（ボーナス都市判定に使用）
+    focus:false,                  // フォーカス使用（還元率+59%）
     saleType:'quick', premium:true,
   };
 }
@@ -77,6 +133,26 @@ function loadState(){
   try{
     const raw = localStorage.getItem(LS_KEY);
     if(raw) return Object.assign(defaultState(), JSON.parse(raw));
+  }catch(e){}
+
+  // v8（都市ボーナスを手動チェックボックスで管理していたバージョン）からの移行
+  // ※ どの都市を指しているかは判別できないため、クラフト都市はデフォルト(Martlock)のまま。
+  //   ボーナス都市の判定は装備ごとに自動で行われるようになったため、旧cityBonus値は使わない。
+  try{
+    const oldRaw = localStorage.getItem('albion_calc_state_v8');
+    if(oldRaw){
+      const old = JSON.parse(oldRaw);
+      const s = defaultState();
+      s.prices = old.prices || {};
+      s.artifactPrices = old.artifactPrices || {};
+      s.sellPrices = old.sellPrices || {};
+      s.bonusSubtypes = old.bonusSubtypes || {};
+      s.craftList = old.craftList || {};
+      s.stationFeeBase = old.stationFeeBase || 0;
+      if(old.settings) Object.assign(s.settings, old.settings);
+      delete s.settings.cityBonus;
+      return s;
+    }
   }catch(e){}
 
   // 旧: craftList["itemId"] = qty（単一ティアのみ）→ 新: craftList["itemId_T{tier}_{ench}"] = {itemId,tier,ench,qty}
@@ -116,6 +192,7 @@ function loadState(){
       if(old.settings) Object.assign(s.settings, old.settings);
       s.stationFeeBase = migrateStationFeeBase(old.settings, old.stationFees);
       delete s.settings.stationFee;
+      delete s.settings.cityBonus;
       return s;
     }
   }catch(e){}
@@ -134,6 +211,7 @@ function loadState(){
       if(old.settings) Object.assign(s.settings, old.settings);
       s.stationFeeBase = migrateStationFeeBase(old.settings, null);
       delete s.settings.stationFee;
+      delete s.settings.cityBonus;
       return s;
     }
   }catch(e){}
@@ -152,6 +230,7 @@ function loadState(){
       s.craftList = migrateCraftList(old.craftList, s.settings.tier, s.settings.ench);
       s.stationFeeBase = migrateStationFeeBase(old.settings, null);
       delete s.settings.stationFee;
+      delete s.settings.cityBonus;
       return s;
     }
   }catch(e){}
@@ -171,6 +250,7 @@ function loadState(){
       s.craftList = migrateCraftList(old.craftList, s.settings.tier, s.settings.ench);
       s.stationFeeBase = migrateStationFeeBase(old.settings, null);
       delete s.settings.stationFee;
+      delete s.settings.cityBonus;
       return s;
     }
   }catch(e){}
@@ -193,6 +273,7 @@ function loadState(){
       s.craftList = migrateCraftList(old.craftList, s.settings.tier, s.settings.ench);
       s.stationFeeBase = migrateStationFeeBase(old.settings, null);
       delete s.settings.stationFee;
+      delete s.settings.cityBonus;
       return s;
     }
   }catch(e){}
@@ -320,12 +401,17 @@ function getBonus(item){
 /* ---------------------------------------------------------------------
    Resource Return Rate（Albion Online Wiki: Resource return rate に準拠）
      - 王都クラフトステーションの基本生産ボーナス：       +18%
-     - 専門化（ボーナスシティ）でのクラフトボーナス：      +15%
+     - 専門化（ボーナスシティ）でのクラフトボーナス：      +15%（選択中のクラフト都市がその装備の
+       ボーナス都市と一致する場合のみ自動適用。手動チェックボックスは廃止）
      - フォーカス使用：                                    +59%（固定）
      - 日替わり生産ボーナス：その日選ばれた2アイテムのみ   +10% or +20%
        （アイテムごとに異なるため、対象アイテムは「原価入力 > ボーナスデー」で個別登録）
    RRR = bonus / (100 + bonus)
 --------------------------------------------------------------------- */
+function isCraftingInBonusCity(item, craftingCity){
+  return !!(craftingCity && getBonusCity(item) === craftingCity);
+}
+
 function calcRRR(opts, item){
   let bonus = 18; // 常時：王都クラフトステーションの基本ボーナス
   if(opts.cityBonus) bonus += 15;
@@ -335,9 +421,11 @@ function calcRRR(opts, item){
   return {rrr, bonus};
 }
 
-function computeItemCost(item, tier, ench){
+function computeItemCost(item, tier, ench, craftingCity){
   const s = STATE.settings;
-  const {rrr, bonus} = calcRRR(s, item);
+  craftingCity = craftingCity || s.craftingCity;
+  const cityBonus = isCraftingInBonusCity(item, craftingCity);
+  const {rrr, bonus} = calcRRR({cityBonus, focus: s.focus}, item);
   const m = item.materials || {plank:0,steel:0,leather:0,cloth:0,artifact:0};
 
   const breakdown = MATERIALS.map(mat=>{
@@ -360,7 +448,7 @@ function computeItemCost(item, tier, ench){
   const grossTotal = grossMaterialCost + artifactCost;               // 還元前の原価
   const total = netMaterialCost + artifactCost + stationFee;          // 実質原価合計（製造料込み）
 
-  return {breakdown, rrr, bonus, grossMaterialCost, returnedValue, netMaterialCost,
+  return {breakdown, rrr, bonus, cityBonus, craftingCity, grossMaterialCost, returnedValue, netMaterialCost,
            artifactQty, artifactCost, stationFee, grossTotal, total};
 }
 
@@ -644,6 +732,8 @@ function renderBonusPage(){
 ======================================================================= */
 function renderSettingsBar(container, opts){
   const s = STATE.settings;
+  const rrrBonus = calcRRR({cityBonus:true, focus:s.focus}).rrr;
+  const rrrNoBonus = calcRRR({cityBonus:false, focus:s.focus}).rrr;
   container.innerHTML = `
     <div class="card settingsbar">
       <div class="settingsbar-row">
@@ -659,6 +749,12 @@ function renderSettingsBar(container, opts){
             ${ENCH.map(e=>`<option value="${e}" ${e==s.ench?'selected':''}>.${e}</option>`).join('')}
           </select>
         </div>
+        <div class="field" style="max-width:170px;">
+          <label>クラフト都市</label>
+          <select id="stCraftingCity">
+            ${CITIES.map(c=>`<option value="${c}" ${c===s.craftingCity?'selected':''}>${CITY_LABELS_JA[c]}</option>`).join('')}
+          </select>
+        </div>
         <div class="field" style="max-width:150px;">
           <label>売却方法</label>
           <select id="stSaleType">
@@ -672,16 +768,11 @@ function renderSettingsBar(container, opts){
           <span class="mtlabel">プレミアム（税4%／なしなら8%）</span>
         </label>
         <label class="minitoggle">
-          <input type="checkbox" id="stCityBonus" ${s.cityBonus?'checked':''}>
-          <span class="slider"></span>
-          <span class="mtlabel">ボーナスシティ(+15%)</span>
-        </label>
-        <label class="minitoggle">
           <input type="checkbox" id="stFocus" ${s.focus?'checked':''}>
           <span class="slider"></span>
           <span class="mtlabel">フォーカス使用(+59%)</span>
         </label>
-        <div class="pill" style="margin-left:auto;">基本還元率 <b id="stRRR">${(calcRRR(s).rrr*100).toFixed(2)}%</b></div>
+        <div class="pill" style="margin-left:auto;">ボーナス都市一致時 <b class="rrr-hit">${(rrrBonus*100).toFixed(2)}%</b> ／ 対象外 <b class="rrr-miss">${(rrrNoBonus*100).toFixed(2)}%</b></div>
       </div>
       <div class="field" style="max-width:220px;margin-top:4px;">
         <label>ステーション使用料（T4.0時点・silver）</label>
@@ -689,6 +780,7 @@ function renderSettingsBar(container, opts){
       </div>
       <div class="note">
         「新規追加時ティア／補正」は、下のリストから<b>新しく追加する</b>装備に使われるデフォルト値です。作成リストに追加済みの各行は、行ごとに個別のティア・補正段階を選べます（複数ティアを同時に計画できます）。<br>
+        「クラフト都市」を選ぶと、その都市がボーナス都市になっている装備だけ自動的に+15%のボーナス還元率が適用されます（装備ごとに手動でON/OFFする必要はありません）。作成リストの各行にも判定結果が表示されます。<br>
         ステーション使用料は「ティア＋補正段階の合計」が1上がるごとに倍になります（T4.0の金額を入力すれば、T4.1〜T8.4は自動計算されます。例：T4.1とT5.0は同額、T4.2とT5.1とT6.0は同額です）。<br>
         日替わりボーナス（+10%/+20%）は「原価入力 &gt; ボーナスデー」で登録した対象の武器種・防具種にのみ自動で加算されます。出品手数料は常に2.5%固定（売り注文の時のみ）、取引税はプレミアムなら4%・なしなら8%です。
       </div>
@@ -697,6 +789,7 @@ function renderSettingsBar(container, opts){
 
   document.getElementById('stTier').addEventListener('change', e=>{ s.tier=Number(e.target.value); saveState(); });
   document.getElementById('stEnch').addEventListener('change', e=>{ s.ench=Number(e.target.value); saveState(); });
+  document.getElementById('stCraftingCity').addEventListener('change', e=>{ s.craftingCity=e.target.value; saveState(); renderCraftListPanel(); updateTopProfit(); });
   document.getElementById('stStationFeeBase').addEventListener('change', e=>{
     setStationFeeBase(e.target.value);
     renderCraftListPanel();
@@ -704,7 +797,6 @@ function renderSettingsBar(container, opts){
   });
   document.getElementById('stSaleType').addEventListener('change', e=>{ s.saleType=e.target.value; saveState(); renderCraftListPanel(); updateTopProfit(); });
   document.getElementById('stPremium').addEventListener('change', e=>{ s.premium=e.target.checked; saveState(); renderCraftListPanel(); updateTopProfit(); });
-  document.getElementById('stCityBonus').addEventListener('change', e=>{ s.cityBonus=e.target.checked; saveState(); renderSettingsBar(container, opts); renderCraftListPanel(); updateTopProfit(); });
   document.getElementById('stFocus').addEventListener('change', e=>{ s.focus=e.target.checked; saveState(); renderSettingsBar(container, opts); renderCraftListPanel(); updateTopProfit(); });
 }
 
@@ -938,11 +1030,18 @@ function renderCraftListPanel(){
       artifactLines.push({item, tier, ench, qty: c.artifactQty*qty, unitPrice, totalCost: c.artifactCost*qty});
     }
 
+    const bCity = getBonusCity(item);
+    const cityBadge = bCity
+      ? (c.cityBonus
+          ? `<span class="citybadge citybadge-hit">🏙 ${CITY_LABELS_JA[bCity]}(ボーナス中)</span>`
+          : `<span class="citybadge citybadge-miss">ボーナス都市: ${CITY_LABELS_JA[bCity]}</span>`)
+      : '';
+
     return `
       <div class="buildrow">
         <div class="brhead">
           <img src="${item.file}" alt="${item.name}">
-          <div class="irname">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}</div>
+          <div class="irname">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}${cityBadge}</div>
           <select class="crafttier" data-key="${key}">
             ${TIERS4to8.map(t=>`<option value="${t}" ${t===tier?'selected':''}>T${t}</option>`).join('')}
           </select>
