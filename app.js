@@ -106,12 +106,14 @@ function getBonusCity(item){
 /* ---------------------------------------------------------------------
    Persistent state (localStorage)
 --------------------------------------------------------------------- */
-const LS_KEY = 'albion_calc_state_v9';
+const LS_KEY = 'albion_calc_state_v10';
 
 function defaultSettings(){
   return {
     tier:4, ench:0,               // 作成リストで実際に作るティア・補正段階
     craftingCity:'Martlock',      // どの都市のステーションでクラフトするか（ボーナス都市判定に使用）
+    buyingCity:'Martlock',        // 素材・アーティファクトをどの都市で買うか（原価計算に使用）
+    sellingCity:'Caerleon',       // どの都市で売るか（売値の参照・利益計算に使用）
     focus:false,                  // フォーカス使用（還元率+59%）
     saleType:'quick', premium:true,
   };
@@ -119,9 +121,12 @@ function defaultSettings(){
 
 function defaultState(){
   return {
-    prices:{},          // prices["plank_T4_1"] = 1234
-    artifactPrices:{},  // artifactPrices["itemId_T6"] = 5000 （アーティファクトは装備ライン毎に種類・価格が異なるため装備ごとに管理）
-    sellPrices:{},      // sellPrices["itemId_T4_0"] = 45000
+    prices:{},          // prices["plank_T4_1"] = 1234 （都市未指定時のフォールバック価格）
+    artifactPrices:{},  // artifactPrices["itemId_T6"] = 5000 （同上フォールバック）
+    sellPrices:{},      // sellPrices["itemId_T4_0"] = 45000 （同上フォールバック）
+    cityPrices:{},         // cityPrices["Thetford:plank_T4_1"] = 1234 （都市別の素材価格）
+    cityArtifactPrices:{},// cityArtifactPrices["Thetford:itemId_T6"] = 5000 （都市別のアーティファクト価格）
+    citySellPrices:{},     // citySellPrices["Caerleon:itemId_T4_0"] = 45000 （都市別の売値）
     bonusSubtypes:{},    // bonusSubtypes["weapon::sword"] = 10 | 20 （その日の日替わり生産ボーナスは"武器種"単位で付与される）
     stationFeeBase:0,   // ステーション使用料：T4.0時点の基準額。ティア+エンチャントの合計が1上がるごとに倍になる
     settings: defaultSettings(),
@@ -133,6 +138,25 @@ function loadState(){
   try{
     const raw = localStorage.getItem(LS_KEY);
     if(raw) return Object.assign(defaultState(), JSON.parse(raw));
+  }catch(e){}
+
+  // v9（価格が都市に依存しない一律の値だったバージョン）からの移行
+  // 旧の一律価格はそのまま prices/sellPrices/artifactPrices（フォールバック）として引き継ぐ。
+  // 都市別の価格（cityPrices等）は空から開始し、必要な都市だけ入力していく形になる。
+  try{
+    const oldRaw = localStorage.getItem('albion_calc_state_v9');
+    if(oldRaw){
+      const old = JSON.parse(oldRaw);
+      const s = defaultState();
+      s.prices = old.prices || {};
+      s.artifactPrices = old.artifactPrices || {};
+      s.sellPrices = old.sellPrices || {};
+      s.bonusSubtypes = old.bonusSubtypes || {};
+      s.craftList = old.craftList || {};
+      s.stationFeeBase = old.stationFeeBase || 0;
+      if(old.settings) Object.assign(s.settings, old.settings);
+      return s;
+    }
   }catch(e){}
 
   // v8（都市ボーナスを手動チェックボックスで管理していたバージョン）からの移行
@@ -322,6 +346,7 @@ function importStateFromFile(file){
 }
 
 function refreshEverything(){
+  renderPriceCitySelector();
   buildRefinedGrid();
   renderEquipPricePage();
   renderBonusPage();
@@ -340,21 +365,32 @@ function fmt(n){
 function priceKey(material, tier, ench){
   return `${material}_T${tier}_${ench}`;
 }
-function getPrice(material, tier, ench){
+function cityPriceKey(city, material, tier, ench){
+  return `${city}:${priceKey(material,tier,ench)}`;
+}
+// 都市別の値があればそれを、なければ従来の一律価格（フォールバック）を返す
+function getPrice(city, material, tier, ench){
+  const v = STATE.cityPrices[cityPriceKey(city, material, tier, ench)];
+  if(v!==undefined && v!==null && Number(v)>0) return Number(v);
   return Number(STATE.prices[priceKey(material,tier,ench)] || 0);
 }
-function setPrice(material, tier, ench, val){
-  STATE.prices[priceKey(material,tier,ench)] = val;
+function setPrice(city, material, tier, ench, val){
+  STATE.cityPrices[cityPriceKey(city, material, tier, ench)] = val;
   saveState();
 }
 function artifactPriceKey(itemId, tier){
   return `${itemId}_T${tier}`;
 }
-function getArtifactPrice(itemId, tier){
+function cityArtifactPriceKey(city, itemId, tier){
+  return `${city}:${artifactPriceKey(itemId, tier)}`;
+}
+function getArtifactPrice(city, itemId, tier){
+  const v = STATE.cityArtifactPrices[cityArtifactPriceKey(city, itemId, tier)];
+  if(v!==undefined && v!==null && Number(v)>0) return Number(v);
   return Number(STATE.artifactPrices[artifactPriceKey(itemId, tier)] || 0);
 }
-function setArtifactPrice(itemId, tier, val){
-  STATE.artifactPrices[artifactPriceKey(itemId, tier)] = val;
+function setArtifactPrice(city, itemId, tier, val){
+  STATE.cityArtifactPrices[cityArtifactPriceKey(city, itemId, tier)] = val;
   saveState();
 }
 // ステーション使用料：T4.0を基準（レベル0）として、ティア+エンチャントの合計が1上がるごとに倍になる
@@ -373,11 +409,16 @@ function setStationFeeBase(val){
 function sellKey(itemId, tier, ench){
   return `${itemId}_T${tier}_${ench}`;
 }
-function getSellPrice(itemId, tier, ench){
+function citySellKey(city, itemId, tier, ench){
+  return `${city}:${sellKey(itemId, tier, ench)}`;
+}
+function getSellPrice(city, itemId, tier, ench){
+  const v = STATE.citySellPrices[citySellKey(city, itemId, tier, ench)];
+  if(v!==undefined && v!==null && Number(v)>0) return Number(v);
   return Number(STATE.sellPrices[sellKey(itemId, tier, ench)] || 0);
 }
-function setSellPrice(itemId, tier, ench, val){
-  STATE.sellPrices[sellKey(itemId, tier, ench)] = val;
+function setSellPrice(city, itemId, tier, ench, val){
+  STATE.citySellPrices[citySellKey(city, itemId, tier, ench)] = val;
   saveState();
 }
 function subtypeKey(category, subtype){
@@ -421,16 +462,17 @@ function calcRRR(opts, item){
   return {rrr, bonus};
 }
 
-function computeItemCost(item, tier, ench, craftingCity){
+function computeItemCost(item, tier, ench, craftingCity, buyingCity){
   const s = STATE.settings;
   craftingCity = craftingCity || s.craftingCity;
+  buyingCity = buyingCity || s.buyingCity || craftingCity;
   const cityBonus = isCraftingInBonusCity(item, craftingCity);
   const {rrr, bonus} = calcRRR({cityBonus, focus: s.focus}, item);
   const m = item.materials || {plank:0,steel:0,leather:0,cloth:0,artifact:0};
 
   const breakdown = MATERIALS.map(mat=>{
     const rawQty = Number(m[mat.id])||0;
-    const unitPrice = getPrice(mat.id, tier, ench);
+    const unitPrice = getPrice(buyingCity, mat.id, tier, ench);
     const grossCost = rawQty * unitPrice;         // 還元前の素材コスト
     const returnedValue = grossCost * rrr;         // 還元される分の金額
     const netCost = grossCost - returnedValue;      // 実質コスト
@@ -442,13 +484,13 @@ function computeItemCost(item, tier, ench, craftingCity){
   const netMaterialCost = grossMaterialCost - returnedValue;
 
   const artifactQty = Number(m.artifact)||0;
-  const artifactCost = artifactQty * getArtifactPrice(item.id, tier); // アーティファクトは還元対象外・装備ごとに単価が異なる
+  const artifactCost = artifactQty * getArtifactPrice(buyingCity, item.id, tier); // アーティファクトは還元対象外・装備ごとに単価が異なる
 
   const stationFee = getStationFee(tier, ench); // ティア+エンチャントの合計が1上がるごとに倍
   const grossTotal = grossMaterialCost + artifactCost;               // 還元前の原価
   const total = netMaterialCost + artifactCost + stationFee;          // 実質原価合計（製造料込み）
 
-  return {breakdown, rrr, bonus, cityBonus, craftingCity, grossMaterialCost, returnedValue, netMaterialCost,
+  return {breakdown, rrr, bonus, cityBonus, craftingCity, buyingCity, grossMaterialCost, returnedValue, netMaterialCost,
            artifactQty, artifactCost, stationFee, grossTotal, total};
 }
 
@@ -464,13 +506,15 @@ function computeNetSell(sellPrice){
   return {taxRate, setupRate, setupFee, tax, net};
 }
 
-function computeProfit(item, tier, ench){
+function computeProfit(item, tier, ench, sellingCity){
+  const s = STATE.settings;
+  sellingCity = sellingCity || s.sellingCity;
   const cost = computeItemCost(item, tier, ench);
-  const sellPrice = getSellPrice(item.id, tier, ench);
+  const sellPrice = getSellPrice(sellingCity, item.id, tier, ench);
   const {net, tax} = computeNetSell(sellPrice);
   const profit = net - cost.total;
   const margin = sellPrice>0 ? (profit/sellPrice*100) : 0;
-  return {cost, sellPrice, net, tax, profit, margin};
+  return {cost, sellPrice, sellingCity, net, tax, profit, margin};
 }
 
 /* ---------------------------------------------------------------------
@@ -520,6 +564,30 @@ document.getElementById('importFileInput').addEventListener('change', (e)=>{
 /* =======================================================================
    PAGE 1-A: 精製素材 price grid
 ======================================================================= */
+/* =======================================================================
+   価格入力の対象都市（精製素材・装備売値・アーティファクトで共有）
+======================================================================= */
+let priceEntryCity = 'Martlock';
+
+function renderPriceCitySelector(){
+  const wrap = document.getElementById('priceCityRow');
+  if(!wrap) return;
+  wrap.innerHTML = CITIES.map(c=>
+    `<button type="button" class="citybtn${c===priceEntryCity?' active':''}" data-city="${c}">${CITY_LABELS_JA[c]}</button>`
+  ).join('');
+  wrap.querySelectorAll('.citybtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      priceEntryCity = btn.dataset.city;
+      renderPriceCitySelector();
+      buildRefinedGrid();
+      renderEquipPricePage();
+    });
+  });
+}
+
+/* =======================================================================
+   PAGE 1-A: 精製素材 price grid
+======================================================================= */
 function buildRefinedGrid(){
   const wrap = document.getElementById('refinedGrid');
   wrap.innerHTML = '';
@@ -534,9 +602,9 @@ function buildRefinedGrid(){
   });
 
   wrap.querySelectorAll('input[data-mat]').forEach(inp=>{
-    inp.value = getPrice(inp.dataset.mat, inp.dataset.tier, inp.dataset.ench) || '';
+    inp.value = getPrice(priceEntryCity, inp.dataset.mat, inp.dataset.tier, inp.dataset.ench) || '';
     inp.addEventListener('input', ()=>{
-      setPrice(inp.dataset.mat, inp.dataset.tier, inp.dataset.ench, Number(inp.value)||0);
+      setPrice(priceEntryCity, inp.dataset.mat, inp.dataset.tier, inp.dataset.ench, Number(inp.value)||0);
       updateTopProfit();
     });
   });
@@ -636,17 +704,17 @@ function renderEquipGrid(panelWrap, g){
   });
 
   grid.querySelectorAll('input[data-item]').forEach(inp=>{
-    inp.value = getSellPrice(inp.dataset.item, inp.dataset.tier, inp.dataset.ench) || '';
+    inp.value = getSellPrice(priceEntryCity, inp.dataset.item, inp.dataset.tier, inp.dataset.ench) || '';
     inp.addEventListener('input', ()=>{
-      setSellPrice(inp.dataset.item, Number(inp.dataset.tier), Number(inp.dataset.ench), Number(inp.value)||0);
+      setSellPrice(priceEntryCity, inp.dataset.item, Number(inp.dataset.tier), Number(inp.dataset.ench), Number(inp.value)||0);
       updateTopProfit();
     });
   });
 
   grid.querySelectorAll('input[data-artifact-item]').forEach(inp=>{
-    inp.value = getArtifactPrice(inp.dataset.artifactItem, inp.dataset.artifactTier) || '';
+    inp.value = getArtifactPrice(priceEntryCity, inp.dataset.artifactItem, inp.dataset.artifactTier) || '';
     inp.addEventListener('input', ()=>{
-      setArtifactPrice(inp.dataset.artifactItem, Number(inp.dataset.artifactTier), Number(inp.value)||0);
+      setArtifactPrice(priceEntryCity, inp.dataset.artifactItem, Number(inp.dataset.artifactTier), Number(inp.value)||0);
       updateTopProfit();
     });
   });
@@ -755,6 +823,18 @@ function renderSettingsBar(container, opts){
             ${CITIES.map(c=>`<option value="${c}" ${c===s.craftingCity?'selected':''}>${CITY_LABELS_JA[c]}</option>`).join('')}
           </select>
         </div>
+        <div class="field" style="max-width:170px;">
+          <label>購入都市（素材・欠片）</label>
+          <select id="stBuyingCity">
+            ${CITIES.map(c=>`<option value="${c}" ${c===s.buyingCity?'selected':''}>${CITY_LABELS_JA[c]}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field" style="max-width:170px;">
+          <label>販売都市</label>
+          <select id="stSellingCity">
+            ${CITIES.map(c=>`<option value="${c}" ${c===s.sellingCity?'selected':''}>${CITY_LABELS_JA[c]}</option>`).join('')}
+          </select>
+        </div>
         <div class="field" style="max-width:150px;">
           <label>売却方法</label>
           <select id="stSaleType">
@@ -780,7 +860,7 @@ function renderSettingsBar(container, opts){
       </div>
       <div class="note">
         「新規追加時ティア／補正」は、下のリストから<b>新しく追加する</b>装備に使われるデフォルト値です。作成リストに追加済みの各行は、行ごとに個別のティア・補正段階を選べます（複数ティアを同時に計画できます）。<br>
-        「クラフト都市」を選ぶと、その都市がボーナス都市になっている装備だけ自動的に+15%のボーナス還元率が適用されます（装備ごとに手動でON/OFFする必要はありません）。作成リストの各行にも判定結果が表示されます。<br>
+        「クラフト都市」を選ぶと、その都市がボーナス都市になっている装備だけ自動的に+15%のボーナス還元率が適用されます。「購入都市」「販売都市」は、原価入力タブで都市ごとに入力した価格のうち、原価計算・利益計算にどの都市の価格を使うかを切り替えます（都市別の価格が未入力の場合は、都市を問わない一律価格にフォールバックします）。<br>
         ステーション使用料は「ティア＋補正段階の合計」が1上がるごとに倍になります（T4.0の金額を入力すれば、T4.1〜T8.4は自動計算されます。例：T4.1とT5.0は同額、T4.2とT5.1とT6.0は同額です）。<br>
         日替わりボーナス（+10%/+20%）は「原価入力 &gt; ボーナスデー」で登録した対象の武器種・防具種にのみ自動で加算されます。出品手数料は常に2.5%固定（売り注文の時のみ）、取引税はプレミアムなら4%・なしなら8%です。
       </div>
@@ -790,6 +870,8 @@ function renderSettingsBar(container, opts){
   document.getElementById('stTier').addEventListener('change', e=>{ s.tier=Number(e.target.value); saveState(); });
   document.getElementById('stEnch').addEventListener('change', e=>{ s.ench=Number(e.target.value); saveState(); });
   document.getElementById('stCraftingCity').addEventListener('change', e=>{ s.craftingCity=e.target.value; saveState(); renderCraftListPanel(); updateTopProfit(); });
+  document.getElementById('stBuyingCity').addEventListener('change', e=>{ s.buyingCity=e.target.value; saveState(); renderCraftListPanel(); updateTopProfit(); });
+  document.getElementById('stSellingCity').addEventListener('change', e=>{ s.sellingCity=e.target.value; saveState(); renderCraftListPanel(); updateTopProfit(); });
   document.getElementById('stStationFeeBase').addEventListener('change', e=>{
     setStationFeeBase(e.target.value);
     renderCraftListPanel();
@@ -996,13 +1078,14 @@ function renderCraftListPanel(){
   const totals = {gross:0, returned:0, station:0, artifact:0, cost:0, sell:0, tax:0, profit:0};
   const materialByTier = {}; // { "T4.0": { plank:{qty,cost}, ... }, ... }
   const artifactLines = []; // [{item, qty, unitPrice, totalCost}]
+  const s = STATE.settings;
 
   function tierEnchLabel(tier, ench){ return `T${tier}.${ench}`; }
 
   const rows = entries.map(({key, entry, item})=>{
     const {tier, ench, qty} = entry;
     const c = computeItemCost(item, tier, ench);
-    const sellPrice = getSellPrice(item.id, tier, ench);
+    const sellPrice = getSellPrice(s.sellingCity, item.id, tier, ench);
     const {net, tax} = computeNetSell(sellPrice);
     const profit = (net - c.total) * qty;
     const margin = sellPrice>0 ? ((net-c.total)/sellPrice*100) : 0;
@@ -1026,7 +1109,7 @@ function renderCraftListPanel(){
       materialByTier[teLabel][b.id].cost += b.grossCost*qty;
     });
     if(c.artifactQty>0){
-      const unitPrice = getArtifactPrice(item.id, tier);
+      const unitPrice = getArtifactPrice(c.buyingCity, item.id, tier);
       artifactLines.push({item, tier, ench, qty: c.artifactQty*qty, unitPrice, totalCost: c.artifactCost*qty});
     }
 
@@ -1163,7 +1246,7 @@ function renderRecoPage(){
   ITEMS.forEach(item=>{
     TIERS4to8.forEach(t=>{
       ENCH.forEach(e=>{
-        const sp = getSellPrice(item.id, t, e);
+        const sp = getSellPrice(s.sellingCity, item.id, t, e);
         if(sp<=0) return;
         const c = computeItemCost(item, t, e);
         const {net} = computeNetSell(sp);
@@ -1243,6 +1326,7 @@ function updateTopProfit(){
 /* =======================================================================
    Init
 ======================================================================= */
+renderPriceCitySelector();
 buildRefinedGrid();
 renderEquipPricePage();
 renderBonusPage();
