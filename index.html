@@ -190,6 +190,12 @@ body{
 }
 .equipcatbtn:hover{border-color:var(--gold-soft);color:var(--text);}
 .equipcatbtn.active{background:linear-gradient(90deg,#2a2211,#191e2a);color:var(--gold);border-color:#3a2f16;}
+.citybtn{
+  background:var(--panel);border:1px solid var(--border);color:var(--text-dim);
+  padding:9px 14px;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;transition:.15s;
+}
+.citybtn:hover{border-color:var(--gold-soft);color:var(--text);}
+.citybtn.active{background:linear-gradient(90deg,#123420,#191e2a);color:#8ef0a8;border-color:#1d5c36;}
 
 .subtyperow{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;}
 .subtypeicon{
@@ -417,6 +423,12 @@ body{
     <div class="note" style="margin-bottom:16px;">
       データはこの端末のブラウザにのみ自動保存されます。他の端末でも使いたい場合は、右上の「エクスポート」でJSONファイルを保存し、別の端末で「インポート」から読み込んでください。
     </div>
+
+    <div class="field" style="max-width:none;margin-bottom:16px;">
+      <label>価格を入力する都市（精製素材・装備売値・アーティファクトで共通）</label>
+      <div class="equipcatrow" id="priceCityRow"></div>
+    </div>
+
     <div class="subtabs">
       <button class="subtabbtn active" data-sub="refined">精製素材</button>
       <button class="subtabbtn" data-sub="equip">装備売値・アーティファクト</button>
@@ -425,7 +437,7 @@ body{
 
     <div class="subpage" id="sub-refined">
       <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
-        実際に買う価格（silver / 個）を入力してください。ブラウザに自動保存されます。T4〜T8は補正段階（.0〜.4）ごとに入力できます。
+        選択中の都市での実際の価格（silver / 個）を入力してください。都市ごとに保存され、未入力の都市は一律のフォールバック価格が使われます。T4〜T8は補正段階（.0〜.4）ごとに入力できます。
       </p>
       <div class="pricegrid" id="refinedGrid"></div>
     </div>
