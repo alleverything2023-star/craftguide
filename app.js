@@ -902,9 +902,10 @@ function renderCraftListPanel(){
   }
 
   const totals = {gross:0, returned:0, station:0, artifact:0, cost:0, sell:0, tax:0, profit:0};
-  const materialTotals = {}; // { plank: {qty, cost}, ... }
-  MATERIALS.forEach(m=> materialTotals[m.id] = {qty:0, cost:0} );
+  const materialByTier = {}; // { "T4.0": { plank:{qty,cost}, ... }, ... }
   const artifactLines = []; // [{item, qty, unitPrice, totalCost}]
+
+  function tierEnchLabel(tier, ench){ return `T${tier}.${ench}`; }
 
   const rows = entries.map(({key, entry, item})=>{
     const {tier, ench, qty} = entry;
@@ -923,13 +924,18 @@ function renderCraftListPanel(){
     totals.tax += tax*qty;
     totals.profit += profit;
 
+    const teLabel = tierEnchLabel(tier, ench);
+    if(!materialByTier[teLabel]){
+      materialByTier[teLabel] = {};
+      MATERIALS.forEach(m=> materialByTier[teLabel][m.id] = {qty:0, cost:0} );
+    }
     c.breakdown.forEach(b=>{
-      materialTotals[b.id].qty += b.rawQty*qty;
-      materialTotals[b.id].cost += b.grossCost*qty;
+      materialByTier[teLabel][b.id].qty += b.rawQty*qty;
+      materialByTier[teLabel][b.id].cost += b.grossCost*qty;
     });
     if(c.artifactQty>0){
       const unitPrice = getArtifactPrice(item.id, tier);
-      artifactLines.push({item, qty: c.artifactQty*qty, unitPrice, totalCost: c.artifactCost*qty});
+      artifactLines.push({item, tier, ench, qty: c.artifactQty*qty, unitPrice, totalCost: c.artifactCost*qty});
     }
 
     return `
@@ -962,19 +968,42 @@ function renderCraftListPanel(){
 
   const totalMargin = totals.sell>0 ? (totals.profit/totals.sell*100) : 0;
 
-  const matRowsHtml = MATERIALS.map(m=>{
-    const t = materialTotals[m.id];
-    if(t.qty<=0) return '';
-    return `<div class="matneedrow"><span class="mnlabel">${m.label}</span><span class="mnqty">${fmt(t.qty)} 個</span><span class="mncost">${fmt(t.cost)}</span></div>`;
+  // ティア・補正段階の若い順に並べる
+  const teKeys = Object.keys(materialByTier).sort((a,b)=>{
+    const [at,ae] = a.slice(1).split('.').map(Number);
+    const [bt,be] = b.slice(1).split('.').map(Number);
+    return (at-bt) || (ae-be);
+  });
+
+  const matGroupsHtml = teKeys.map(teLabel=>{
+    const mats = materialByTier[teLabel];
+    const rowsHtml = MATERIALS.map(m=>{
+      const t = mats[m.id];
+      if(t.qty<=0) return '';
+      return `<div class="matneedrow"><span class="mnlabel">${m.label}</span><span class="mnqty">${fmt(t.qty)} 個</span><span class="mncost">${fmt(t.cost)}</span></div>`;
+    }).join('');
+    if(!rowsHtml) return '';
+    return `<div class="matneedgroup">
+      <div class="matneedgroup-title">${teLabel}</div>
+      ${rowsHtml}
+    </div>`;
   }).join('');
 
-  const artRowsHtml = artifactLines.map(a=>`
-    <div class="artneedrow">
-      <img class="artthumb" src="${a.item.file}" alt="${a.item.name}">
-      <span class="artmult">× ${fmt(a.qty)}</span>
-      <span class="artname">${a.item.name}</span>
-      <span class="artcost">${fmt(a.totalCost)}</span>
-    </div>`).join('');
+  const artGroupsHtml = teKeys.map(teLabel=>{
+    const [t,e] = teLabel.slice(1).split('.').map(Number);
+    const lines = artifactLines.filter(a=>a.tier===t && a.ench===e);
+    if(lines.length===0) return '';
+    return `<div class="artneeds">
+      <div class="matneedgroup-title">${teLabel} のアーティファクト</div>
+      ${lines.map(a=>`
+        <div class="artneedrow">
+          <img class="artthumb" src="${a.item.file}" alt="${a.item.name}">
+          <span class="artmult">× ${fmt(a.qty)}</span>
+          <span class="artname">${a.item.name}</span>
+          <span class="artcost">${fmt(a.totalCost)}</span>
+        </div>`).join('')}
+    </div>`;
+  }).join('');
 
   wrap.innerHTML = `
     <div class="card">
@@ -983,12 +1012,11 @@ function renderCraftListPanel(){
       <div class="buildrows">${rows}</div>
     </div>
     <div class="card summary-box">
-      <div class="summary-title">必要な素材（合計・還元前の購入必要数）</div>
-      ${matRowsHtml || `<div class="srow"><span class="k">素材データなし</span></div>`}
-      ${artRowsHtml ? `<div class="artneeds">${artRowsHtml}</div>` : ''}
+      <div class="summary-title">必要な素材（ティア・補正段階ごと／還元前の購入必要数）</div>
+      ${matGroupsHtml || `<div class="srow"><span class="k">素材データなし</span></div>`}
+      ${artGroupsHtml}
     </div>
-    <div class="card summary-box">
-      <div class="summary-title">合計</div>
+    <div class="card summary-box">      <div class="summary-title">合計</div>
       <div class="srow"><span class="k">素材原価（還元前）</span><span class="v">${fmt(totals.gross-totals.artifact)}</span></div>
       <div class="srow"><span class="k">還元額</span><span class="v profit-pos">-${fmt(totals.returned)}</span></div>
       <div class="srow"><span class="k">アーティファクト代</span><span class="v">${fmt(totals.artifact)}</span></div>
