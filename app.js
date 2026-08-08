@@ -18,6 +18,35 @@ const MATERIALS = [
   {id:'cloth',   label:'布 (Cloth)'},
 ];
 
+// 未加工素材（精錬前の原材料）。精製素材1個を作るのに必要な原材料の換算に使う（Step④）
+const RAW_MATERIALS = [
+  {id:'raw_plank',   label:'原木 (Wood)',  refines:'plank'},
+  {id:'raw_steel',   label:'鉱石 (Ore)',   refines:'steel'},
+  {id:'raw_leather', label:'原皮 (Hide)',  refines:'leather'},
+  {id:'raw_cloth',   label:'繊維 (Fiber)', refines:'cloth'},
+];
+
+// 精錬時の原材料必要数（ユーザー提示の固定値）。
+// T4: Raw2+下位(T3)精製素材1 / T5: Raw3+T4×1 / T6: Raw4+T5×1 / T7: Raw5+T6×1 / T8: Raw6+T7×1
+const REFINE_RECIPE = {
+  4: { raw:2, lowerTier:3, lowerQty:1 },
+  5: { raw:3, lowerTier:4, lowerQty:1 },
+  6: { raw:4, lowerTier:5, lowerQty:1 },
+  7: { raw:5, lowerTier:6, lowerQty:1 },
+  8: { raw:6, lowerTier:7, lowerQty:1 },
+};
+
+// AODP (Albion Online Data Project) のアイテムID。精製素材・原材料は
+// "T{tier}_{RESOURCE}"（エンチャントは末尾に @1〜@4）という確立された命名規則があるため自動生成できる。
+// 個別の装備（Set名やアーティファクト接尾辞がバラバラ）は自動生成せず、手動で対応表に登録する（Step⑤）。
+const MATERIAL_AODP_BASE = { plank:'PLANKS', steel:'METALBAR', leather:'LEATHER', cloth:'CLOTH' };
+const RAW_AODP_BASE = { raw_plank:'WOOD', raw_steel:'ORE', raw_leather:'HIDE', raw_cloth:'FIBER' };
+function materialAodpId(materialId, tier, ench){
+  const base = MATERIAL_AODP_BASE[materialId] || RAW_AODP_BASE[materialId];
+  if(!base) return null;
+  return `T${tier}_${base}` + (ench>0 ? `@${ench}` : '');
+}
+
 const TIERS4to8 = [4,5,6,7,8];
 const ENCH = [0,1,2,3,4];
 
@@ -106,7 +135,7 @@ function getBonusCity(item){
 /* ---------------------------------------------------------------------
    Persistent state (localStorage)
 --------------------------------------------------------------------- */
-const LS_KEY = 'albion_calc_state_v10';
+const LS_KEY = 'albion_calc_state_v12';
 
 function defaultSettings(){
   return {
@@ -127,6 +156,8 @@ function defaultState(){
     cityPrices:{},         // cityPrices["Thetford:plank_T4_1"] = 1234 （都市別の素材価格）
     cityArtifactPrices:{},// cityArtifactPrices["Thetford:itemId_T6"] = 5000 （都市別のアーティファクト価格）
     citySellPrices:{},     // citySellPrices["Caerleon:itemId_T4_0"] = 45000 （都市別の売値）
+    inventory:{},           // inventory["Martlock:plank_T4_1"] = 320 （都市の倉庫にある素材の在庫数）
+    aodpMapping:{},          // aodpMapping["itemId"] = "T4_HEAD_PLATE_SET1" （AODPのアイテムID。装備ごとに手動登録）
     bonusSubtypes:{},    // bonusSubtypes["weapon::sword"] = 10 | 20 （その日の日替わり生産ボーナスは"武器種"単位で付与される）
     stationFeeBase:0,   // ステーション使用料：T4.0時点の基準額。ティア+エンチャントの合計が1上がるごとに倍になる
     settings: defaultSettings(),
@@ -138,6 +169,47 @@ function loadState(){
   try{
     const raw = localStorage.getItem(LS_KEY);
     if(raw) return Object.assign(defaultState(), JSON.parse(raw));
+  }catch(e){}
+
+  // v11（在庫管理は導入済みだが、AODP連携が無かったバージョン）からの移行
+  try{
+    const oldRaw = localStorage.getItem('albion_calc_state_v11');
+    if(oldRaw){
+      const old = JSON.parse(oldRaw);
+      const s = defaultState();
+      s.prices = old.prices || {};
+      s.artifactPrices = old.artifactPrices || {};
+      s.sellPrices = old.sellPrices || {};
+      s.cityPrices = old.cityPrices || {};
+      s.cityArtifactPrices = old.cityArtifactPrices || {};
+      s.citySellPrices = old.citySellPrices || {};
+      s.inventory = old.inventory || {};
+      s.bonusSubtypes = old.bonusSubtypes || {};
+      s.craftList = old.craftList || {};
+      s.stationFeeBase = old.stationFeeBase || 0;
+      if(old.settings) Object.assign(s.settings, old.settings);
+      return s;
+    }
+  }catch(e){}
+
+  // v10（都市別価格マトリクスは導入済みだが、在庫管理が無かったバージョン）からの移行
+  try{
+    const oldRaw = localStorage.getItem('albion_calc_state_v10');
+    if(oldRaw){
+      const old = JSON.parse(oldRaw);
+      const s = defaultState();
+      s.prices = old.prices || {};
+      s.artifactPrices = old.artifactPrices || {};
+      s.sellPrices = old.sellPrices || {};
+      s.cityPrices = old.cityPrices || {};
+      s.cityArtifactPrices = old.cityArtifactPrices || {};
+      s.citySellPrices = old.citySellPrices || {};
+      s.bonusSubtypes = old.bonusSubtypes || {};
+      s.craftList = old.craftList || {};
+      s.stationFeeBase = old.stationFeeBase || 0;
+      if(old.settings) Object.assign(s.settings, old.settings);
+      return s;
+    }
   }catch(e){}
 
   // v9（価格が都市に依存しない一律の値だったバージョン）からの移行
@@ -350,9 +422,114 @@ function refreshEverything(){
   buildRefinedGrid();
   renderEquipPricePage();
   renderBonusPage();
+  renderInventoryPage();
   renderBuildPage();
   renderRecoPage();
   updateTopProfit();
+}
+
+/* ---------------------------------------------------------------------
+   Step⑤: AODP (Albion Online Data Project) 連携
+   公開APIのため認証不要。素材・原材料はティア/エンチャントから機械的にIDを組み立てられる
+   ので一括自動取得、装備はSET名等がバラバラで誤取得のリスクがあるため、
+   1度だけ手動でAODPのアイテムIDを登録してもらい、以降はそのIDから自動取得する。
+--------------------------------------------------------------------- */
+const AODP_SERVERS = {
+  west:   'https://west.albion-online-data.com',
+  east:   'https://east.albion-online-data.com',
+  europe: 'https://europe.albion-online-data.com',
+};
+let aodpServer = 'west';
+
+async function fetchAODPPrices(itemIds, {server, locations, qualities} = {}){
+  server = server || aodpServer;
+  const base = AODP_SERVERS[server];
+  const locStr = (locations || CITIES).join(',');
+  const qStr = (qualities || [1]).join(',');
+  const url = `${base}/api/v2/stats/prices/${itemIds.join(',')}.json?locations=${locStr}&qualities=${qStr}`;
+  const res = await fetch(url);
+  if(!res.ok) throw new Error('AODP request failed: HTTP '+res.status);
+  return res.json();
+}
+
+// URL長制限（4096文字）を避けるため、アイテムIDをチャンクに分けて順番に取得する
+async function fetchAODPPricesChunked(itemIds, opts, chunkSize=80){
+  const all = [];
+  for(let i=0; i<itemIds.length; i+=chunkSize){
+    const chunk = itemIds.slice(i, i+chunkSize);
+    const data = await fetchAODPPrices(chunk, opts);
+    all.push(...data);
+  }
+  return all;
+}
+
+// 精製素材＋原材料の価格を、全都市分まとめて自動取得する
+async function syncMaterialsFromAODP(statusCb){
+  const ids = [];
+  const idMeta = {};
+  [...MATERIALS, ...RAW_MATERIALS].forEach(mat=>{
+    [1,2,3].forEach(t=>{
+      const id = materialAodpId(mat.id, t, 0);
+      if(id){ ids.push(id); idMeta[id] = {matId:mat.id, tier:t, ench:0}; }
+    });
+    TIERS4to8.forEach(t=> ENCH.forEach(e=>{
+      const id = materialAodpId(mat.id, t, e);
+      if(id){ ids.push(id); idMeta[id] = {matId:mat.id, tier:t, ench:e}; }
+    }));
+  });
+
+  if(statusCb) statusCb(`${ids.length}件のIDを取得中…`);
+  const data = await fetchAODPPricesChunked(ids, {locations: CITIES});
+  let count = 0;
+  data.forEach(row=>{
+    if(!(row.sell_price_min>0)) return;
+    const meta = idMeta[row.item_id];
+    if(!meta) return;
+    setPrice(row.city, meta.matId, meta.tier, meta.ench, row.sell_price_min);
+    count++;
+  });
+  return count;
+}
+
+function getAodpCode(itemId){
+  return STATE.aodpMapping[itemId] || '';
+}
+function setAodpCode(itemId, code){
+  code = (code||'').trim().toUpperCase();
+  if(!code){ delete STATE.aodpMapping[itemId]; }
+  else STATE.aodpMapping[itemId] = code;
+  saveState();
+}
+
+// 1装備分の売値（全都市・T4〜T8・全補正段階）をAODPから取得する。
+// 入力されたAODPコードのティア部分（先頭の T{n}_）を差し替えて、各ティアのIDを組み立てる。
+async function syncItemFromAODP(item){
+  const code = getAodpCode(item.id);
+  if(!code) return 0;
+  const m = code.match(/^T\d+_(.+)$/);
+  if(!m) throw new Error('AODPコードは "T4_..." の形式で入力してください');
+  const suffix = m[1];
+
+  const ids = [];
+  const idMeta = {};
+  TIERS4to8.forEach(t=>{
+    ENCH.forEach(e=>{
+      const id = `T${t}_${suffix}` + (e>0 ? `@${e}` : '');
+      ids.push(id);
+      idMeta[id] = {tier:t, ench:e};
+    });
+  });
+
+  const data = await fetchAODPPricesChunked(ids, {locations: CITIES, qualities:[1]});
+  let count = 0;
+  data.forEach(row=>{
+    if(!(row.sell_price_min>0)) return;
+    const meta = idMeta[row.item_id];
+    if(!meta) return;
+    setSellPrice(row.city, item.id, meta.tier, meta.ench, row.sell_price_min);
+    count++;
+  });
+  return count;
 }
 
 /* ---------------------------------------------------------------------
@@ -419,6 +596,17 @@ function getSellPrice(city, itemId, tier, ench){
 }
 function setSellPrice(city, itemId, tier, ench, val){
   STATE.citySellPrices[citySellKey(city, itemId, tier, ench)] = val;
+  saveState();
+}
+// 都市の倉庫にある素材の在庫数（材料の必要数から差し引いて実際の購入必要数を出すために使う）
+function inventoryKey(city, material, tier, ench){
+  return `${city}:${priceKey(material, tier, ench)}`;
+}
+function getInventoryQty(city, material, tier, ench){
+  return Number(STATE.inventory[inventoryKey(city, material, tier, ench)] || 0);
+}
+function setInventoryQty(city, material, tier, ench, val){
+  STATE.inventory[inventoryKey(city, material, tier, ench)] = Math.max(0, Number(val)||0);
   saveState();
 }
 function subtypeKey(category, subtype){
@@ -518,6 +706,114 @@ function computeProfit(item, tier, ench, sellingCity){
 }
 
 /* ---------------------------------------------------------------------
+   Step④: 素材の調達方法比較（直接買う／原材料を買って精錬する／輸送する）
+   T1〜T3は精錬レシピが未定義（下位ティアが存在しないか、比率が異なるため）なので
+   比較対象は T4〜T8 のみ。
+--------------------------------------------------------------------- */
+const TRANSPORT_FEE_RATE = 0.05; // 輸送コストの目安（積み荷紛失リスク等を織り込んだ概算率。実態に合わせて調整可）
+
+function compareSourcingOptions(materialId, tier, ench, qty){
+  const s = STATE.settings;
+  const rawId = 'raw_' + materialId;
+  const bonusCity = REFINE_BONUS_CITY[materialId];
+  const recipe = REFINE_RECIPE[tier];
+
+  // A. 直接買う：全都市のうち最安値
+  const buyOptions = CITIES.map(city => ({
+    city, unitCost: getPrice(city, materialId, tier, ench),
+  })).filter(o => o.unitCost>0);
+  const buyLocal = buyOptions.sort((a,b)=>a.unitCost-b.unitCost)[0];
+
+  // B. 原材料を買って、ボーナス都市で精錬する（還元率が原材料の実質消費量を下げる）
+  let refine = null;
+  if(recipe && bonusCity){
+    const rawPrice = getPrice(bonusCity, rawId, tier, ench);
+    const lowerPrice = recipe.lowerQty>0 ? getPrice(bonusCity, materialId, recipe.lowerTier, ench) : 0;
+    if(rawPrice>0){
+      const {rrr} = calcRRR({cityBonus:true, focus:s.focus}); // 精錬所もそのボーナス都市にある前提
+      const grossCost = (rawPrice*recipe.raw) + (lowerPrice*recipe.lowerQty);
+      refine = { city: bonusCity, unitCost: grossCost * (1-rrr), grossCost };
+    }
+  }
+
+  // C. 他都市の安い在庫を輸送してくる（想定輸送コスト率を加算）
+  const transport = buyLocal
+    ? { city: buyLocal.city, unitCost: buyLocal.unitCost * (1+TRANSPORT_FEE_RATE) }
+    : null;
+
+  const options = [
+    buyLocal && {method:'buy', label:'直接購入', ...buyLocal},
+    refine && {method:'refine', label:'精錬する', ...refine},
+    transport && {method:'transport', label:'輸送する', ...transport},
+  ].filter(Boolean);
+
+  options.forEach(o => o.totalCost = o.unitCost * qty);
+  options.sort((a,b)=>a.unitCost-b.unitCost);
+  return { best: options[0] || null, all: options };
+}
+
+/* ---------------------------------------------------------------------
+   Step⑥: 都市ルート・予算の推奨アルゴリズム
+   ロイヤル5都市は環状（Martlock↔Thetford↔FortSterling↔Lymhurst↔Bridgewatch↔Martlock）。
+   Caerleonは中心に位置し、距離・移動時間は評価対象から除外（工程の最後に任意で寄る想定）。
+--------------------------------------------------------------------- */
+const CITY_RING = ['Martlock', 'Thetford', 'FortSterling', 'Lymhurst', 'Bridgewatch']; // Caerleonはリングに含めない
+const RISK = { ROYAL: 0, CAERLEON: 2 };
+
+function ringDistance(cityA, cityB){
+  if(cityA===cityB) return 0;
+  if(cityA==='Caerleon' || cityB==='Caerleon') return null; // 仕様により距離評価の対象外
+  const n = CITY_RING.length;
+  const ia = CITY_RING.indexOf(cityA), ib = CITY_RING.indexOf(cityB);
+  const diff = Math.abs(ia-ib);
+  return Math.min(diff, n-diff);
+}
+function routeRisk(cities){
+  return cities.includes('Caerleon') ? RISK.CAERLEON : RISK.ROYAL;
+}
+
+/**
+ * item を tier.ench で qty 個作る場合の、買う都市→作る都市→売る都市の組み合わせを
+ * 総当たりで評価し、利益/時間が高い順に上位を返す。
+ * opts.includeCaerleon が true のときだけ、カエルレオン絡みのルート（距離は考慮せず参考値として）も候補に含める。
+ */
+function recommendRoutes(item, tier, ench, qty, {budget, maxRiskTier, includeCaerleon}={}){
+  budget = budget>0 ? budget : Infinity;
+  maxRiskTier = maxRiskTier!==undefined ? maxRiskTier : RISK.ROYAL;
+  const results = [];
+  const candidateCities = includeCaerleon ? CITIES : CITY_RING;
+
+  candidateCities.forEach(buyCity=>{
+    candidateCities.forEach(craftCity=>{
+      candidateCities.forEach(sellCity=>{
+        const riskTier = routeRisk([buyCity, craftCity, sellCity]);
+        if(riskTier > maxRiskTier) return;
+
+        const cost = computeItemCost(item, tier, ench, craftCity, buyCity);
+        const materialCost = cost.total * qty;
+        if(materialCost > budget) return;
+
+        const sellPrice = getSellPrice(sellCity, item.id, tier, ench);
+        if(sellPrice<=0) return;
+        const {net} = computeNetSell(sellPrice);
+        const profit = (net - cost.total) * qty;
+
+        // 移動時間モデル：リング距離の合計（カエルレオン絡みの区間は距離評価から除外＝0扱い）
+        const legDistBuyCraft = ringDistance(buyCity, craftCity);
+        const legDistCraftSell = ringDistance(craftCity, sellCity);
+        const legs = (legDistBuyCraft||0) + (legDistCraftSell||0);
+        const estHours = 0.25*legs + 0.15; // 1リング区間=0.25時間 + クラフト等の固定時間0.15時間（目安。実測に合わせて調整可）
+        const profitPerHour = profit / estHours;
+
+        results.push({buyCity, craftCity, sellCity, cost, materialCost, sellPrice, profit, profitPerHour, riskTier, legs});
+      });
+    });
+  });
+
+  return results.sort((a,b)=>b.profitPerHour-a.profitPerHour).slice(0,10);
+}
+
+/* ---------------------------------------------------------------------
    Tab switching
 --------------------------------------------------------------------- */
 document.querySelectorAll('.tabbtn').forEach(btn=>{
@@ -529,6 +825,7 @@ document.querySelectorAll('.tabbtn').forEach(btn=>{
     document.getElementById('page-'+page).classList.add('active');
     if(page==='build') renderBuildPage();
     if(page==='reco') renderRecoPage();
+    if(page==='route') renderRoutePage();
   });
 });
 
@@ -540,6 +837,7 @@ document.querySelectorAll('.subtabbtn').forEach(btn=>{
     document.getElementById('sub-'+btn.dataset.sub).style.display = '';
     if(btn.dataset.sub==='equip') renderEquipPricePage();
     if(btn.dataset.sub==='bonus') renderBonusPage();
+    if(btn.dataset.sub==='inventory') renderInventoryPage();
   });
 });
 
@@ -559,6 +857,23 @@ document.getElementById('importFileInput').addEventListener('change', (e)=>{
   const file = e.target.files[0];
   if(file) importStateFromFile(file);
   e.target.value = ''; // 同じファイルを連続で選んでも change が発火するように
+});
+
+document.getElementById('aodpServerSelect').addEventListener('change', e=>{ aodpServer = e.target.value; });
+document.getElementById('aodpSyncMaterialsBtn').addEventListener('click', async ()=>{
+  const statusEl = document.getElementById('aodpMaterialsStatus');
+  statusEl.textContent = '取得中…（少し時間がかかります）';
+  statusEl.className = 'aodpstatus';
+  try{
+    const count = await syncMaterialsFromAODP(msg=>{ statusEl.textContent = msg; });
+    statusEl.textContent = `${count}件の価格を取得・反映しました`;
+    statusEl.className = 'aodpstatus ok';
+    buildRefinedGrid();
+    updateTopProfit();
+  }catch(err){
+    statusEl.textContent = '取得失敗: '+err.message+'（サーバーを変えて再試行してみてください）';
+    statusEl.className = 'aodpstatus err';
+  }
 });
 
 /* =======================================================================
@@ -589,9 +904,14 @@ function renderPriceCitySelector(){
    PAGE 1-A: 精製素材 price grid
 ======================================================================= */
 function buildRefinedGrid(){
-  const wrap = document.getElementById('refinedGrid');
+  buildMaterialGrid('refinedGrid', MATERIALS);
+  buildMaterialGrid('rawGrid', RAW_MATERIALS);
+}
+function buildMaterialGrid(wrapId, matList){
+  const wrap = document.getElementById(wrapId);
+  if(!wrap) return;
   wrap.innerHTML = '';
-  MATERIALS.forEach(mat=>{
+  matList.forEach(mat=>{
     const col = document.createElement('div');
     col.className = 'pricecol';
     let html = `<h5>${mat.label}</h5>`;
@@ -685,6 +1005,11 @@ function renderEquipGrid(panelWrap, g){
     const col = document.createElement('div');
     col.className = 'pricecol equipcol';
     let html = `<h5><img class="colthumb" src="${item.file}" alt="">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}</h5>`;
+    html += `<div class="aodprow">
+      <input type="text" class="aodpinput" placeholder="AODPコード (例: T4_HEAD_PLATE_SET1)" data-aodp-item="${item.id}" value="${getAodpCode(item.id)}">
+      <button type="button" class="tinybtn aodpsyncbtn" data-aodp-item="${item.id}">取得</button>
+    </div>
+    <div class="aodpstatus" data-aodp-status="${item.id}"></div>`;
     html += `<div class="prow subtle" style="padding-top:6px;"><label style="font-weight:700;color:var(--text-faint);">売値</label></div>`;
     TIERS4to8.forEach(t=>{
       ENCH.forEach(e=>{
@@ -716,6 +1041,31 @@ function renderEquipGrid(panelWrap, g){
     inp.addEventListener('input', ()=>{
       setArtifactPrice(priceEntryCity, inp.dataset.artifactItem, Number(inp.dataset.artifactTier), Number(inp.value)||0);
       updateTopProfit();
+    });
+  });
+
+  grid.querySelectorAll('.aodpinput').forEach(inp=>{
+    inp.addEventListener('change', ()=> setAodpCode(inp.dataset.aodpItem, inp.value));
+  });
+  grid.querySelectorAll('.aodpsyncbtn').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const itemId = btn.dataset.aodpItem;
+      const item = ITEMS.find(i=>i.id===itemId);
+      const statusEl = grid.querySelector(`[data-aodp-status="${CSS.escape(itemId)}"]`);
+      const codeInput = grid.querySelector(`.aodpinput[data-aodp-item="${CSS.escape(itemId)}"]`);
+      setAodpCode(itemId, codeInput.value);
+      if(!getAodpCode(itemId)){ statusEl.textContent='先にAODPコードを入力してください'; statusEl.className='aodpstatus err'; return; }
+      statusEl.textContent = '取得中…'; statusEl.className = 'aodpstatus';
+      try{
+        const count = await syncItemFromAODP(item);
+        statusEl.textContent = count>0 ? `${count}件の価格を取得しました` : '価格が見つかりませんでした（コードを確認してください）';
+        statusEl.className = 'aodpstatus ' + (count>0?'ok':'err');
+        renderEquipPricePage();
+        updateTopProfit();
+      }catch(err){
+        statusEl.textContent = '取得失敗: '+err.message;
+        statusEl.className = 'aodpstatus err';
+      }
     });
   });
 }
@@ -792,6 +1142,50 @@ function renderBonusPage(){
     });
     subRow.appendChild(btn);
   });
+}
+
+/* =======================================================================
+   PAGE 1-E: 在庫 — 都市の倉庫にある素材の在庫数を登録
+   （作成リストの「必要な素材」から自動的に差し引かれ、実際の購入必要数がわかる）
+======================================================================= */
+let inventoryCity = 'Martlock';
+
+function renderInventoryPage(){
+  const catRow = document.getElementById('inventoryCityRow');
+  catRow.innerHTML = CITIES.map(c=>
+    `<button type="button" class="citybtn${c===inventoryCity?' active':''}" data-city="${c}">${CITY_LABELS_JA[c]}</button>`
+  ).join('');
+  catRow.querySelectorAll('.citybtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      inventoryCity = btn.dataset.city;
+      renderInventoryPage();
+    });
+  });
+
+  const wrap = document.getElementById('inventoryGrid');
+  wrap.innerHTML = '';
+  MATERIALS.forEach(mat=>{
+    const col = document.createElement('div');
+    col.className = 'pricecol';
+    let html = `<h5>${mat.label}</h5>`;
+    [1,2,3].forEach(t=> html += invRowHtml(mat.id, t, 0, `T${t}`) );
+    TIERS4to8.forEach(t=> ENCH.forEach(e=> html += invRowHtml(mat.id, t, e, `T${t}.${e}`) ));
+    col.innerHTML = html;
+    wrap.appendChild(col);
+  });
+
+  wrap.querySelectorAll('input[data-mat]').forEach(inp=>{
+    inp.value = getInventoryQty(inventoryCity, inp.dataset.mat, inp.dataset.tier, inp.dataset.ench) || '';
+    // change（フォーカスが外れた時）で反映：数値入力の1文字ずつ問題を避けるため
+    inp.addEventListener('change', ()=>{
+      setInventoryQty(inventoryCity, inp.dataset.mat, inp.dataset.tier, inp.dataset.ench, inp.value);
+      renderCraftListPanel();
+    });
+  });
+}
+function invRowHtml(matId, tier, ench, label){
+  return `<div class="prow"><label>${label}</label>
+    <input type="number" min="0" placeholder="0" data-mat="${matId}" data-tier="${tier}" data-ench="${ench}"></div>`;
 }
 
 
@@ -886,9 +1280,9 @@ function renderSettingsBar(container, opts){
    グループ化されたアイテムピッカー（種類ごとに折りたたみ）— 作成リストで使用
 ======================================================================= */
 const pickerUIState = {
-  activeCategory: {build:'head'},
-  searchTerm: {build:''},
-  expandedGroups: {build:new Set()},
+  activeCategory: {build:'head', route:'head'},
+  searchTerm: {build:'', route:''},
+  expandedGroups: {build:new Set(), route:new Set()},
 };
 
 function groupKey(category, sub){
@@ -1157,16 +1551,35 @@ function renderCraftListPanel(){
     return (at-bt) || (ae-be);
   });
 
+  // 在庫（購入都市の倉庫）を必要数から差し引き、実際の購入必要数・購入コストを算出
+  let inventorySavings = 0;
   const matGroupsHtml = teKeys.map(teLabel=>{
+    const [t, e] = teLabel.slice(1).split('.').map(Number);
     const mats = materialByTier[teLabel];
     const rowsHtml = MATERIALS.map(m=>{
-      const t = mats[m.id];
-      if(t.qty<=0) return '';
-      return `<div class="matneedrow"><span class="mnlabel">${m.label}</span><span class="mnqty">${fmt(t.qty)} 個</span><span class="mncost">${fmt(t.cost)}</span></div>`;
+      const need = mats[m.id];
+      if(need.qty<=0) return '';
+      const owned = getInventoryQty(s.buyingCity, m.id, t, e);
+      const unitPrice = need.qty>0 ? need.cost/need.qty : 0;
+      const usedFromStock = Math.min(owned, need.qty);
+      const toBuy = Math.max(0, need.qty - owned);
+      const buyCost = toBuy * unitPrice;
+      inventorySavings += usedFromStock * unitPrice;
+
+      const qtyLine = owned>0
+        ? `必要 ${fmt(need.qty)} － 在庫 ${fmt(usedFromStock)} = 購入 ${fmt(toBuy)} 個`
+        : `${fmt(need.qty)} 個`;
+
+      const sourcing = compareSourcingOptions(m.id, t, e, Math.max(toBuy,1));
+      const sourceBadge = sourcing.best
+        ? `<span class="sourcebadge sb-${sourcing.best.method}">${sourcing.best.label}@${CITY_LABELS_JA[sourcing.best.city]}</span>`
+        : '';
+
+      return `<div class="matneedrow"><span class="mnlabel">${m.label}${sourceBadge}</span><span class="mnqty">${qtyLine}</span><span class="mncost">${fmt(owned>0?buyCost:need.cost)}</span></div>`;
     }).join('');
     if(!rowsHtml) return '';
     return `<div class="matneedgroup">
-      <div class="matneedgroup-title">${teLabel}</div>
+      <div class="matneedgroup-title">${teLabel}（購入都市: ${CITY_LABELS_JA[s.buyingCity]}の在庫を差し引き済み）</div>
       ${rowsHtml}
     </div>`;
   }).join('');
@@ -1187,6 +1600,9 @@ function renderCraftListPanel(){
     </div>`;
   }).join('');
 
+  const netCostAfterInventory = Math.max(0, totals.cost - inventorySavings);
+  const netProfitAfterInventory = totals.profit + inventorySavings;
+
   wrap.innerHTML = `
     <div class="card">
       <h3>作成リスト（${entries.length}行）</h3>
@@ -1194,7 +1610,7 @@ function renderCraftListPanel(){
       <div class="buildrows">${rows}</div>
     </div>
     <div class="card summary-box">
-      <div class="summary-title">必要な素材（ティア・補正段階ごと／還元前の購入必要数）</div>
+      <div class="summary-title">必要な素材（ティア・補正段階ごと）</div>
       ${matGroupsHtml || `<div class="srow"><span class="k">素材データなし</span></div>`}
       ${artGroupsHtml}
     </div>
@@ -1208,6 +1624,11 @@ function renderCraftListPanel(){
       <div class="srow"><span class="k">税金・出品手数料</span><span class="v">-${fmt(totals.tax)}</span></div>
       <div class="srow total"><span class="k">合計利益</span><span class="v ${totals.profit>=0?'profit-pos':'profit-neg'}">${totals.profit>=0?'+':''}${fmt(totals.profit)}</span></div>
       <div class="srow"><span class="k">合計利益率</span><span class="v ${totalMargin>=0?'profit-pos':'profit-neg'}">${totals.sell>0?totalMargin.toFixed(1)+'%':'—'}</span></div>
+      ${inventorySavings>0 ? `
+      <div class="srow"><span class="k">在庫による節約</span><span class="v profit-pos">-${fmt(inventorySavings)}</span></div>
+      <div class="srow total"><span class="k">在庫考慮後の実質原価</span><span class="v">${fmt(netCostAfterInventory)}</span></div>
+      <div class="srow"><span class="k">在庫考慮後の合計利益</span><span class="v ${netProfitAfterInventory>=0?'profit-pos':'profit-neg'}">${netProfitAfterInventory>=0?'+':''}${fmt(netProfitAfterInventory)}</span></div>
+      ` : ''}
     </div>
   `;
 
@@ -1300,6 +1721,102 @@ function renderRecoPage(){
 }
 
 /* =======================================================================
+   PAGE 4: ルート提案 — 買う都市→作る都市→売る都市の組み合わせを推奨
+======================================================================= */
+let routeSelectedItem = null;
+
+function renderRoutePage(){
+  const tierSel = document.getElementById('routeTier');
+  const enchSel = document.getElementById('routeEnch');
+  if(!tierSel.dataset.filled){
+    tierSel.innerHTML = TIERS4to8.map(t=>`<option value="${t}">T${t}</option>`).join('');
+    enchSel.innerHTML = ENCH.map(e=>`<option value="${e}">.${e}</option>`).join('');
+    tierSel.value = STATE.settings.tier;
+    enchSel.value = STATE.settings.ench;
+    tierSel.dataset.filled = '1';
+    tierSel.addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
+    enchSel.addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
+    document.getElementById('routeQty').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
+    document.getElementById('routeBudget').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
+    document.getElementById('routeIncludeCaerleon').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
+  }
+
+  renderCategorySidebar('route', document.getElementById('routeCategoryList'), renderRoutePage);
+
+  const search = document.getElementById('routeSearch');
+  search.value = pickerUIState.searchTerm.route;
+  search.oninput = (e)=>{ pickerUIState.searchTerm.route = e.target.value.trim().toLowerCase(); renderRoutePage(); };
+
+  renderItemPicker('route', document.getElementById('routeItemList'), (item)=>{
+    const row = document.createElement('div');
+    row.className = 'itemrow';
+    const selected = routeSelectedItem && routeSelectedItem.id===item.id;
+    row.innerHTML = `
+      <img src="${item.file}" alt="${item.name}">
+      <div class="irname">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}</div>
+      <button type="button" class="tinybtn routepickbtn">${selected?'選択中':'この装備で計算'}</button>
+    `;
+    row.querySelector('.routepickbtn').addEventListener('click', ()=>{
+      routeSelectedItem = item;
+      computeAndRenderRoutes();
+    });
+    return row;
+  });
+
+  if(routeSelectedItem) computeAndRenderRoutes();
+}
+
+function computeAndRenderRoutes(){
+  const wrap = document.getElementById('routeResultPanel');
+  if(!routeSelectedItem){ wrap.innerHTML=''; return; }
+
+  const tier = Number(document.getElementById('routeTier').value);
+  const ench = Number(document.getElementById('routeEnch').value);
+  const qty = Math.max(1, Number(document.getElementById('routeQty').value)||1);
+  const budget = Number(document.getElementById('routeBudget').value)||0;
+  const includeCaerleon = document.getElementById('routeIncludeCaerleon').checked;
+
+  const results = recommendRoutes(routeSelectedItem, tier, ench, qty, {
+    budget: budget>0 ? budget : Infinity,
+    maxRiskTier: includeCaerleon ? RISK.CAERLEON : RISK.ROYAL,
+    includeCaerleon,
+  });
+
+  if(results.length===0){
+    wrap.innerHTML = `<div class="empty-hint">条件に合うルートが見つかりません。売値・素材価格が都市ごとに入力されているか確認してください（「原価入力」タブで各都市の価格を入力すると候補が増えます）。</div>`;
+    return;
+  }
+
+  wrap.innerHTML = `
+    <div class="card">
+      <h3>${routeSelectedItem.name} T${tier}.${ench} × ${qty} のおすすめルート</h3>
+      <div class="sub">利益/時間が高い順（上位10件）。距離はロイヤル都市の環状マップに基づく概算です。</div>
+      <div class="routerows">
+        ${results.map((r,idx)=>`
+          <div class="routerow">
+            <span class="rerank">${idx+1}</span>
+            <div class="routepath">
+              <span class="rp-city">${CITY_LABELS_JA[r.buyCity]}</span>
+              <span class="rp-arrow">買う→</span>
+              <span class="rp-city ${r.cost.cityBonus?'rp-bonus':''}">${CITY_LABELS_JA[r.craftCity]}${r.cost.cityBonus?' 🏙':''}</span>
+              <span class="rp-arrow">作る→</span>
+              <span class="rp-city">${CITY_LABELS_JA[r.sellCity]}</span>
+              <span class="rp-arrow">売る</span>
+              ${r.riskTier>0 ? '<span class="citybadge citybadge-miss" style="margin-left:8px;">⚠ カエルレオン経由</span>' : ''}
+            </div>
+            <div class="bstat"><span class="bk">原価</span><span class="bv">${fmt(r.materialCost)}</span></div>
+            <div class="bstat"><span class="bk">売値</span><span class="bv">${fmt(r.sellPrice*1)}</span></div>
+            <div class="bstat"><span class="bk">利益</span><span class="bv ${r.profit>=0?'profit-pos':'profit-neg'}">${r.profit>=0?'+':''}${fmt(r.profit)}</span></div>
+            <div class="bstat"><span class="bk">概算所要時間</span><span class="bv">${(0.25*r.legs+0.15).toFixed(2)}h</span></div>
+            <div class="bstat"><span class="bk">利益/時間</span><span class="bv strong ${r.profitPerHour>=0?'profit-pos':'profit-neg'}">${fmt(r.profitPerHour)}/h</span></div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+/* =======================================================================
    共通：トップバーの概算利益表示（作成リスト合計の利益）
 ======================================================================= */
 function updateTopProfit(){
@@ -1330,6 +1847,7 @@ renderPriceCitySelector();
 buildRefinedGrid();
 renderEquipPricePage();
 renderBonusPage();
+renderInventoryPage();
 renderBuildPage();
 renderRecoPage();
 updateTopProfit();
