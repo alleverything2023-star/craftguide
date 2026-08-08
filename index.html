@@ -214,6 +214,15 @@ body{
 }
 .equipcol h5{display:flex;align-items:center;gap:7px;font-size:11.5px;line-height:1.3;}
 .colthumb{width:20px;height:20px;object-fit:contain;flex-shrink:0;}
+.aodprow{display:flex;gap:6px;margin-bottom:4px;}
+.aodprow .aodpinput{
+  flex:1;min-width:0;background:#0e1119;border:1px solid var(--border);color:var(--text);
+  padding:5px 7px;border-radius:6px;font-size:10.5px;outline:none;
+}
+.aodpstatus{font-size:10.5px;color:var(--text-faint);display:block;margin-bottom:8px;}
+.aodpstatus.ok{color:var(--green);}
+.aodpstatus.err{color:var(--red);}
+
 
 /* ===== ボーナスデー（原価入力タブ） ===== */
 .bonuschip{
@@ -267,6 +276,17 @@ body{
 .recorow img{width:30px;height:30px;object-fit:contain;flex-shrink:0;}
 .recorow .irname{flex-basis:200px;flex-grow:1;font-size:12.5px;}
 .retier{font-size:10.5px;color:var(--text-faint);margin-left:6px;}
+
+/* ===== ルート提案タブ ===== */
+.routerows{display:flex;flex-direction:column;gap:8px;margin-top:10px;}
+.routerow{
+  display:flex;align-items:center;gap:12px;background:#11151e;border:1px solid var(--border);
+  border-radius:10px;padding:9px 12px;flex-wrap:wrap;
+}
+.routepath{flex-basis:100%;display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12.5px;margin-bottom:2px;}
+.rp-city{font-weight:700;color:var(--text);background:#171c28;padding:2px 9px;border-radius:7px;}
+.rp-city.rp-bonus{color:#8ef0a8;background:#123420;}
+.rp-arrow{color:var(--text-faint);font-size:11px;}
 
 /* ===== Settings bar (作成リストで使用) ===== */
 .settingsbar{padding:14px 18px;margin-bottom:16px;}
@@ -329,6 +349,10 @@ body{
 .matneedrow{display:flex;justify-content:space-between;align-items:center;padding:7px 0;font-size:13px;border-bottom:1px dashed #262c3a;}
 .matneedrow:last-child{border-bottom:none;}
 .matneedrow .mnlabel{color:var(--text-dim);}
+.sourcebadge{display:inline-block;margin-left:7px;font-size:9px;padding:1px 7px;border-radius:6px;font-weight:700;vertical-align:middle;}
+.sb-buy{background:#12203a;color:#7db4f5;}
+.sb-refine{background:#123420;color:#8ef0a8;}
+.sb-transport{background:#3a2a12;color:#f3c98b;}
 .matneedrow .mnqty{color:var(--text);font-weight:600;margin-left:auto;margin-right:16px;font-variant-numeric:tabular-nums;}
 .matneedrow .mncost{font-weight:700;font-variant-numeric:tabular-nums;color:var(--gold-soft);min-width:80px;text-align:right;}
 .artneeds{display:flex;flex-direction:column;gap:6px;margin-top:6px;margin-bottom:14px;padding-top:8px;border-top:1px solid #3a2f16;}
@@ -407,6 +431,7 @@ body{
     <button class="tabbtn active" data-page="cost"><span class="dot"></span>原価入力</button>
     <button class="tabbtn" data-page="build"><span class="dot"></span>作成リスト</button>
     <button class="tabbtn" data-page="reco"><span class="dot"></span>おすすめ</button>
+    <button class="tabbtn" data-page="route"><span class="dot"></span>ルート提案</button>
   </div>
   <div class="appbar-right">
     <div class="pill">作成リスト利益 <b id="topProfit">—</b></div>
@@ -433,13 +458,37 @@ body{
       <button class="subtabbtn active" data-sub="refined">精製素材</button>
       <button class="subtabbtn" data-sub="equip">装備売値・アーティファクト</button>
       <button class="subtabbtn" data-sub="bonus">ボーナスデー</button>
+      <button class="subtabbtn" data-sub="inventory">在庫</button>
     </div>
 
     <div class="subpage" id="sub-refined">
+      <div class="card" style="padding:14px 18px;margin-bottom:16px;">
+        <div class="settingsbar-row" style="align-items:flex-end;">
+          <div class="field" style="max-width:150px;">
+            <label>AODPサーバー</label>
+            <select id="aodpServerSelect">
+              <option value="west">West (北米/アジア)</option>
+              <option value="east">East</option>
+              <option value="europe">Europe</option>
+            </select>
+          </div>
+          <button type="button" class="btn primary" id="aodpSyncMaterialsBtn">素材価格をAODPから一括取得</button>
+          <span class="aodpstatus" id="aodpMaterialsStatus"></span>
+        </div>
+        <div class="note" style="margin-top:8px;margin-bottom:0;">
+          Albion Online Data Project（無料の公開マーケットデータAPI）から、下の全素材・全都市の現在価格を自動取得します。取得した価格は「選択中の都市」に関わらず、各都市の欄にそのまま反映されます。
+        </div>
+      </div>
       <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
         選択中の都市での実際の価格（silver / 個）を入力してください。都市ごとに保存され、未入力の都市は一律のフォールバック価格が使われます。T4〜T8は補正段階（.0〜.4）ごとに入力できます。
       </p>
       <div class="pricegrid" id="refinedGrid"></div>
+
+      <h4 style="margin:22px 0 6px;font-size:12.5px;color:var(--gold-soft);text-transform:uppercase;letter-spacing:.05em;">原材料（精製前）</h4>
+      <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
+        「作成リスト &gt; 調達方法の比較」で、精製素材を直接買うより自分で精錬した方が安いかを判断するために使います。
+      </p>
+      <div class="pricegrid" id="rawGrid"></div>
     </div>
 
     <div class="subpage" id="sub-equip" style="display:none;">
@@ -466,6 +515,17 @@ body{
         <div class="subtyperow" id="bonusSubtypeRow"></div>
       </div>
     </div>
+
+    <div class="subpage" id="sub-inventory" style="display:none;">
+      <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
+        都市の倉庫にある素材の在庫数を入力してください。作成リストの「必要な素材」・利益計算では、ここで登録した在庫（購入都市＝設定バーの「購入都市」）が自動的に必要数から差し引かれ、実際に買う必要がある量とその分の節約額が表示されます。
+      </p>
+      <div class="field" style="max-width:none;margin-bottom:14px;">
+        <label>在庫を入力する都市</label>
+        <div class="equipcatrow" id="inventoryCityRow"></div>
+      </div>
+      <div class="pricegrid" id="inventoryGrid"></div>
+    </div>
   </div>
 </div>
 
@@ -490,6 +550,48 @@ body{
 <div class="page" id="page-reco">
   <div class="main" style="padding:22px 26px;">
     <div id="recoList"></div>
+  </div>
+</div>
+
+<!-- ============ PAGE 4: ルート提案 (Buy -> Craft -> Sell route recommender) ============ -->
+<div class="page" id="page-route">
+  <div class="layout">
+    <div class="sidebar"><h4>装備カテゴリ</h4><div id="routeCategoryList"></div></div>
+    <div class="main main wide">
+      <div class="card settingsbar">
+        <div class="settingsbar-row">
+          <div class="field" style="max-width:110px;">
+            <label>ティア</label>
+            <select id="routeTier"></select>
+          </div>
+          <div class="field" style="max-width:110px;">
+            <label>補正段階</label>
+            <select id="routeEnch"></select>
+          </div>
+          <div class="field" style="max-width:120px;">
+            <label>個数</label>
+            <input type="number" id="routeQty" min="1" value="1">
+          </div>
+          <div class="field" style="max-width:160px;">
+            <label>予算上限（silver・任意）</label>
+            <input type="number" id="routeBudget" min="0" placeholder="上限なし">
+          </div>
+          <label class="minitoggle">
+            <input type="checkbox" id="routeIncludeCaerleon">
+            <span class="slider"></span>
+            <span class="mtlabel">カエルレオン経由も候補に含める（Risk 2）</span>
+          </label>
+        </div>
+        <div class="note">
+          下の一覧から装備を選ぶと、買う都市→作る都市→売る都市の組み合わせを総当たりで評価し、利益/時間が高い順に上位10件を表示します。
+          距離・移動時間はロイヤル5都市の環状マップ（隣接=1、対角=2）に基づく概算です。カエルレオンは中心都市のため、原則としてルート評価（距離・時間）には含めず、
+          「カエルレオン経由も候補に含める」を有効にした場合のみ参考ルートとして表示します（この場合、カエルレオン絡みの区間距離は0として扱われます＝末尾に任意で寄る想定）。
+        </div>
+      </div>
+      <div class="searchrow"><input type="text" id="routeSearch" placeholder="装備名で検索…（例: Royal, Knight, Bow）"></div>
+      <div id="routeItemList"></div>
+      <div id="routeResultPanel" style="margin-top:16px;"></div>
+    </div>
   </div>
 </div>
 
