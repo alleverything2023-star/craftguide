@@ -135,7 +135,7 @@ function getBonusCity(item){
 /* ---------------------------------------------------------------------
    Persistent state (localStorage)
 --------------------------------------------------------------------- */
-const LS_KEY = 'albion_calc_state_v12';
+const LS_KEY = 'albion_calc_state_v13';
 
 function defaultSettings(){
   return {
@@ -157,7 +157,8 @@ function defaultState(){
     cityArtifactPrices:{},// cityArtifactPrices["Thetford:itemId_T6"] = 5000 （都市別のアーティファクト価格）
     citySellPrices:{},     // citySellPrices["Caerleon:itemId_T4_0"] = 45000 （都市別の売値）
     inventory:{},           // inventory["Martlock:plank_T4_1"] = 320 （都市の倉庫にある素材の在庫数）
-    aodpMapping:{},          // aodpMapping["itemId"] = "T4_HEAD_PLATE_SET1" （AODPのアイテムID。装備ごとに手動登録）
+    aodpMapping:{},          // aodpMapping["itemId"] = "T4_HEAD_PLATE_SET1" （AODPのアイテムID。実データベースから選択式で登録）
+    aodpMappingNames:{},      // aodpMappingNames["itemId"] = "Soldier Helmet" （確認用の英語名。表示のみに使用）
     bonusSubtypes:{},    // bonusSubtypes["weapon::sword"] = 10 | 20 （その日の日替わり生産ボーナスは"武器種"単位で付与される）
     stationFeeBase:0,   // ステーション使用料：T4.0時点の基準額。ティア+エンチャントの合計が1上がるごとに倍になる
     settings: defaultSettings(),
@@ -169,6 +170,29 @@ function loadState(){
   try{
     const raw = localStorage.getItem(LS_KEY);
     if(raw) return Object.assign(defaultState(), JSON.parse(raw));
+  }catch(e){}
+
+  // v12（フリー入力のAODPコード欄があった旧バージョン）からの移行
+  // ※ フリー入力のコードはタイポの可能性があるため、あえて引き継がず、
+  //   選択式UIで登録し直してもらう（安全のためのリセット）。
+  try{
+    const oldRaw = localStorage.getItem('albion_calc_state_v12');
+    if(oldRaw){
+      const old = JSON.parse(oldRaw);
+      const s = defaultState();
+      s.prices = old.prices || {};
+      s.artifactPrices = old.artifactPrices || {};
+      s.sellPrices = old.sellPrices || {};
+      s.cityPrices = old.cityPrices || {};
+      s.cityArtifactPrices = old.cityArtifactPrices || {};
+      s.citySellPrices = old.citySellPrices || {};
+      s.inventory = old.inventory || {};
+      s.bonusSubtypes = old.bonusSubtypes || {};
+      s.craftList = old.craftList || {};
+      s.stationFeeBase = old.stationFeeBase || 0;
+      if(old.settings) Object.assign(s.settings, old.settings);
+      return s;
+    }
   }catch(e){}
 
   // v11（在庫管理は導入済みだが、AODP連携が無かったバージョン）からの移行
@@ -494,11 +518,77 @@ async function syncMaterialsFromAODP(statusCb){
 function getAodpCode(itemId){
   return STATE.aodpMapping[itemId] || '';
 }
-function setAodpCode(itemId, code){
+function setAodpCode(itemId, code, name){
   code = (code||'').trim().toUpperCase();
-  if(!code){ delete STATE.aodpMapping[itemId]; }
-  else STATE.aodpMapping[itemId] = code;
+  if(!code){
+    delete STATE.aodpMapping[itemId];
+    delete STATE.aodpMappingNames[itemId];
+  }else{
+    STATE.aodpMapping[itemId] = code;
+    if(name) STATE.aodpMappingNames[itemId] = name;
+  }
   saveState();
+}
+function getAodpEnglishName(itemId){
+  return STATE.aodpMappingNames ? (STATE.aodpMappingNames[itemId]||'') : '';
+}
+
+/* ---------------------------------------------------------------------
+   AODPアイテムID検索（タイポ防止のための選択式UI用データソース）
+   ao-bin-dumps（Albion Onlineのゲームデータから機械的に抽出された実データ、約16MB）を
+   初回利用時にのみブラウザが直接取得し、英語名で検索→クリックで選ぶ方式にすることで、
+   手入力によるタイポ・404エラーを防ぐ。取得したデータはこのセッション中のみメモリに保持する
+   （容量が大きいためlocalStorageには保存しない＝ページを再読み込みすると再取得が必要）。
+--------------------------------------------------------------------- */
+const AODP_ITEM_DB_URL = 'https://raw.githubusercontent.com/broderickhyman/ao-bin-dumps/master/formatted/items.json';
+let aodpItemIndex = null;      // [{id:'T4_HEAD_PLATE_SET1', name:'Soldier Helmet'}, ...]
+let aodpItemIndexPromise = null;
+
+async function ensureAODPItemIndex(statusCb){
+  if(aodpItemIndex) return aodpItemIndex;
+  if(aodpItemIndexPromise) return aodpItemIndexPromise;
+
+  aodpItemIndexPromise = (async ()=>{
+    if(statusCb) statusCb('アイテムデータベースを取得中…（初回のみ・16MBほどあるため数秒〜数十秒かかります）');
+    const res = await fetch(AODP_ITEM_DB_URL);
+    if(!res.ok) throw new Error('データベース取得失敗: HTTP '+res.status);
+    const raw = await res.json();
+    if(statusCb) statusCb('アイテム名を解析中…');
+
+    // ao-bin-dumpsの形式は更新でフィールド名が変わることがあるため、複数パターンを試す
+    const list = Array.isArray(raw) ? raw : (raw.items || Object.values(raw));
+    const index = [];
+    list.forEach(entry=>{
+      if(!entry) return;
+      const uniqueName = entry.UniqueName || entry.uniqueName || entry.Index || entry.id;
+      if(!uniqueName || typeof uniqueName !== 'string') return;
+      const localized = entry.LocalizedNames || entry.localizedNames || {};
+      const enName = localized['EN-US'] || localized['en-US'] || localized.EN || entry.EnglishItemName || entry.name;
+      if(!enName) return;
+      index.push({id: uniqueName, name: enName});
+    });
+
+    if(index.length===0) throw new Error('データの形式を認識できませんでした（サイト側の形式変更の可能性があります）');
+    aodpItemIndex = index;
+    if(statusCb) statusCb(`読み込み完了（${index.length}件）`);
+    return aodpItemIndex;
+  })();
+
+  try{
+    return await aodpItemIndexPromise;
+  }catch(err){
+    aodpItemIndexPromise = null; // 失敗時は次回また取得を試せるようにする
+    throw err;
+  }
+}
+
+function searchAODPItemIndex(query, limit=15){
+  if(!aodpItemIndex || !query) return [];
+  const q = query.trim().toLowerCase();
+  if(!q) return [];
+  return aodpItemIndex
+    .filter(e => e.name.toLowerCase().includes(q))
+    .slice(0, limit);
 }
 
 // 1装備分の売値（全都市・T4〜T8・全補正段階）をAODPから取得する。
@@ -772,29 +862,89 @@ function routeRisk(cities){
   return cities.includes('Caerleon') ? RISK.CAERLEON : RISK.ROYAL;
 }
 
+/* ---------------------------------------------------------------------
+   AODP: 直近の出来高・価格推移（流動性・安定性の分析用）
+   /stats/charts エンドポイント（日次バケット）から直近N日分を取り出し、
+   平均出来高・平均価格・価格変動係数（安定性）・トレンド（直近の伸び率）を算出する。
+--------------------------------------------------------------------- */
+async function fetchAODPMarketStats(item, tier, ench, city, days=7){
+  const code = getAodpCode(item.id);
+  if(!code) return null;
+  const m = code.match(/^T\d+_(.+)$/);
+  if(!m) return null;
+  const id = `T${tier}_${m[1]}` + (ench>0 ? `@${ench}` : '');
+  const base = AODP_SERVERS[aodpServer];
+  const url = `${base}/api/v2/stats/charts/${id}.json?locations=${city}&time-scale=24`;
+  const res = await fetch(url);
+  if(!res.ok) throw new Error('AODP chart request failed: HTTP '+res.status);
+  const data = await res.json();
+  const points = (data[0] && data[0].data) || [];
+  const recent = points.slice(-days);
+
+  if(recent.length===0) return {city, avgVolume:0, avgPrice:0, volatility:0, trend:0, samples:0};
+
+  const volumes = recent.map(p=>Number(p.item_count)||0);
+  const prices = recent.map(p=>Number(p.avg_price)||0).filter(p=>p>0);
+  const avgVolume = volumes.reduce((a,b)=>a+b,0) / volumes.length;
+  const avgPrice = prices.length ? prices.reduce((a,b)=>a+b,0)/prices.length : 0;
+  const variance = prices.length ? prices.reduce((s,p)=>s+Math.pow(p-avgPrice,2),0)/prices.length : 0;
+  const volatility = avgPrice>0 ? Math.sqrt(variance)/avgPrice : 0; // 変動係数（小さいほど価格が安定）
+  const trend = (prices.length>=2 && prices[0]>0) ? (prices[prices.length-1]-prices[0])/prices[0] : 0; // 期間中の上昇/下落率
+
+  return {city, avgVolume, avgPrice, volatility, trend, samples:recent.length};
+}
+
+// 候補となる売却都市すべての市場統計を並行取得し、都市名をキーにしたマップで返す
+async function fetchMarketStatsForCities(item, tier, ench, cities, days){
+  if(!getAodpCode(item.id)) return {}; // AODPコード未登録なら市場データ無しとして扱う（フィルタは効かせない）
+  const entries = await Promise.all(cities.map(async city=>{
+    try{ return [city, await fetchAODPMarketStats(item, tier, ench, city, days)]; }
+    catch(e){ return [city, null]; }
+  }));
+  const map = {};
+  entries.forEach(([city, stats])=>{ if(stats) map[city] = stats; });
+  return map;
+}
+
 /**
  * item を tier.ench で qty 個作る場合の、買う都市→作る都市→売る都市の組み合わせを
  * 総当たりで評価し、利益/時間が高い順に上位を返す。
  * opts.includeCaerleon が true のときだけ、カエルレオン絡みのルート（距離は考慮せず参考値として）も候補に含める。
+ * opts.cityStats: {city: {avgVolume, avgPrice, volatility, trend}} — fetchMarketStatsForCities() の戻り値。
+ * opts.minVolume: 売却都市の直近平均出来高（1日あたり）がこれ未満のルートは除外する（在庫リスク回避）。
+ * opts.maxVolatility: 価格変動係数がこれを超える売却都市は除外する（暴騰/暴落に惑わされないため）。
+ * opts.bonusDayDiscount: 対象アイテムの武器種/防具種が本日ボーナス対象の場合、
+ *   供給過多で値崩れしやすい前提で売値をこの%だけ割り引いて保守的に見積もる。
  */
-function recommendRoutes(item, tier, ench, qty, {budget, maxRiskTier, includeCaerleon}={}){
-  budget = budget>0 ? budget : Infinity;
-  maxRiskTier = maxRiskTier!==undefined ? maxRiskTier : RISK.ROYAL;
+function recommendRoutes(item, tier, ench, qty, opts={}){
+  const {budget, maxRiskTier, includeCaerleon, cityStats={}, minVolume=0, maxVolatility=null, bonusDayDiscount=0} = opts;
+  const effBudget = budget>0 ? budget : Infinity;
+  const effMaxRisk = maxRiskTier!==undefined ? maxRiskTier : RISK.ROYAL;
   const results = [];
   const candidateCities = includeCaerleon ? CITIES : CITY_RING;
+
+  const isBonusToday = getBonusForSubtype(item.category, item.subtype) > 0;
+  const priceDiscountFactor = isBonusToday ? (1 - (Number(bonusDayDiscount)||0)/100) : 1;
 
   candidateCities.forEach(buyCity=>{
     candidateCities.forEach(craftCity=>{
       candidateCities.forEach(sellCity=>{
         const riskTier = routeRisk([buyCity, craftCity, sellCity]);
-        if(riskTier > maxRiskTier) return;
+        if(riskTier > effMaxRisk) return;
+
+        const stats = cityStats[sellCity] || null;
+        if(stats){
+          if(minVolume>0 && stats.avgVolume < minVolume) return;       // 流動性フィルタ
+          if(maxVolatility!=null && stats.volatility > maxVolatility) return; // 安定性フィルタ
+        }
 
         const cost = computeItemCost(item, tier, ench, craftCity, buyCity);
         const materialCost = cost.total * qty;
-        if(materialCost > budget) return;
+        if(materialCost > effBudget) return;
 
-        const sellPrice = getSellPrice(sellCity, item.id, tier, ench);
-        if(sellPrice<=0) return;
+        const rawSellPrice = getSellPrice(sellCity, item.id, tier, ench);
+        if(rawSellPrice<=0) return;
+        const sellPrice = rawSellPrice * priceDiscountFactor; // ボーナスデー割引を反映した保守的な見積もり
         const {net} = computeNetSell(sellPrice);
         const profit = (net - cost.total) * qty;
 
@@ -805,7 +955,8 @@ function recommendRoutes(item, tier, ench, qty, {budget, maxRiskTier, includeCae
         const estHours = 0.25*legs + 0.15; // 1リング区間=0.25時間 + クラフト等の固定時間0.15時間（目安。実測に合わせて調整可）
         const profitPerHour = profit / estHours;
 
-        results.push({buyCity, craftCity, sellCity, cost, materialCost, sellPrice, profit, profitPerHour, riskTier, legs});
+        results.push({buyCity, craftCity, sellCity, cost, materialCost, rawSellPrice, sellPrice, profit, profitPerHour,
+                       riskTier, legs, marketStats: stats, isBonusToday});
       });
     });
   });
@@ -1005,11 +1156,7 @@ function renderEquipGrid(panelWrap, g){
     const col = document.createElement('div');
     col.className = 'pricecol equipcol';
     let html = `<h5><img class="colthumb" src="${item.file}" alt="">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}</h5>`;
-    html += `<div class="aodprow">
-      <input type="text" class="aodpinput" placeholder="AODPコード (例: T4_HEAD_PLATE_SET1)" data-aodp-item="${item.id}" value="${getAodpCode(item.id)}">
-      <button type="button" class="tinybtn aodpsyncbtn" data-aodp-item="${item.id}">取得</button>
-    </div>
-    <div class="aodpstatus" data-aodp-status="${item.id}"></div>`;
+    html += renderAodpBlockHtml(item);
     html += `<div class="prow subtle" style="padding-top:6px;"><label style="font-weight:700;color:var(--text-faint);">売値</label></div>`;
     TIERS4to8.forEach(t=>{
       ENCH.forEach(e=>{
@@ -1044,28 +1191,116 @@ function renderEquipGrid(panelWrap, g){
     });
   });
 
-  grid.querySelectorAll('.aodpinput').forEach(inp=>{
-    inp.addEventListener('change', ()=> setAodpCode(inp.dataset.aodpItem, inp.value));
-  });
-  grid.querySelectorAll('.aodpsyncbtn').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const itemId = btn.dataset.aodpItem;
-      const item = ITEMS.find(i=>i.id===itemId);
-      const statusEl = grid.querySelector(`[data-aodp-status="${CSS.escape(itemId)}"]`);
-      const codeInput = grid.querySelector(`.aodpinput[data-aodp-item="${CSS.escape(itemId)}"]`);
-      setAodpCode(itemId, codeInput.value);
-      if(!getAodpCode(itemId)){ statusEl.textContent='先にAODPコードを入力してください'; statusEl.className='aodpstatus err'; return; }
-      statusEl.textContent = '取得中…'; statusEl.className = 'aodpstatus';
-      try{
-        const count = await syncItemFromAODP(item);
-        statusEl.textContent = count>0 ? `${count}件の価格を取得しました` : '価格が見つかりませんでした（コードを確認してください）';
-        statusEl.className = 'aodpstatus ' + (count>0?'ok':'err');
-        renderEquipPricePage();
-        updateTopProfit();
-      }catch(err){
-        statusEl.textContent = '取得失敗: '+err.message;
-        statusEl.className = 'aodpstatus err';
+  bindAodpBlockEvents(grid, g.items);
+}
+
+/* -----------------------------------------------------------------------
+   AODPコードの選択式UI（タイポ防止）
+   ・未登録：英語名で検索 → 実データベースの候補をクリックで選択（自由入力不可）
+   ・登録済：確定したID＋英語名をチップ表示、「変更」でまた検索モードに戻れる
+----------------------------------------------------------------------- */
+function renderAodpBlockHtml(item){
+  const code = getAodpCode(item.id);
+  if(code){
+    const enName = getAodpEnglishName(item.id);
+    return `<div class="aodpblock" data-aodp-item="${item.id}">
+      <div class="aodpchip">
+        <span class="aodpchip-id">${code}</span>
+        ${enName ? `<span class="aodpchip-name">${enName}</span>` : ''}
+        <button type="button" class="tinybtn aodpchangebtn" data-aodp-item="${item.id}">変更</button>
+      </div>
+      <div class="aodpstatus" data-aodp-status="${item.id}"></div>
+    </div>`;
+  }
+  return `<div class="aodpblock" data-aodp-item="${item.id}">
+    <div class="aodprow">
+      <input type="text" class="aodpsearch" placeholder="英語名で検索…" data-aodp-item="${item.id}" value="${item.name}">
+    </div>
+    <div class="aodpresults" data-aodp-results="${item.id}"></div>
+    <div class="aodpstatus" data-aodp-status="${item.id}"></div>
+  </div>`;
+}
+
+function bindAodpBlockEvents(grid, items){
+  // 検索欄：入力のたびに候補リストだけを差し替える（列全体は再描画しないのでフォーカスは失われない）
+  grid.querySelectorAll('.aodpsearch').forEach(inp=>{
+    const itemId = inp.dataset.aodpItem;
+    const resultsEl = grid.querySelector(`[data-aodp-results="${CSS.escape(itemId)}"]`);
+    const statusEl = grid.querySelector(`[data-aodp-status="${CSS.escape(itemId)}"]`);
+
+    const runSearch = async ()=>{
+      if(!aodpItemIndex){
+        statusEl.textContent = '';
+        try{
+          await ensureAODPItemIndex(msg=>{ statusEl.textContent = msg; });
+        }catch(err){
+          statusEl.textContent = '候補データベースの取得に失敗しました: '+err.message;
+          statusEl.className = 'aodpstatus err';
+          return;
+        }
       }
+      statusEl.textContent = '';
+      const matches = searchAODPItemIndex(inp.value);
+      resultsEl.innerHTML = matches.length
+        ? matches.map(m=>`<div class="aodpresultrow" data-pick-id="${m.id}" data-pick-name="${m.name.replace(/"/g,'&quot;')}">
+             <span class="aodpresult-id">${m.id}</span><span class="aodpresult-name">${m.name}</span>
+           </div>`).join('')
+        : `<div class="aodpresult-empty">候補が見つかりません（英語名で検索してください）</div>`;
+      resultsEl.querySelectorAll('.aodpresultrow').forEach(row=>{
+        row.addEventListener('click', ()=>{
+          setAodpCode(itemId, row.dataset.pickId, row.dataset.pickName);
+          renderEquipPricePage(); // 選択が確定したのでチップ表示に切り替える
+        });
+      });
+    };
+
+    inp.addEventListener('focus', runSearch);
+    inp.addEventListener('input', ()=>{
+      if(aodpItemIndex){
+        const matches = searchAODPItemIndex(inp.value);
+        resultsEl.innerHTML = matches.length
+          ? matches.map(m=>`<div class="aodpresultrow" data-pick-id="${m.id}" data-pick-name="${m.name.replace(/"/g,'&quot;')}">
+               <span class="aodpresult-id">${m.id}</span><span class="aodpresult-name">${m.name}</span>
+             </div>`).join('')
+          : `<div class="aodpresult-empty">候補が見つかりません</div>`;
+        resultsEl.querySelectorAll('.aodpresultrow').forEach(row=>{
+          row.addEventListener('click', ()=>{
+            setAodpCode(itemId, row.dataset.pickId, row.dataset.pickName);
+            renderEquipPricePage();
+          });
+        });
+      }else{
+        runSearch();
+      }
+    });
+  });
+
+  // 変更ボタン：確定済みチップを検索モードに戻す
+  grid.querySelectorAll('.aodpchangebtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      setAodpCode(btn.dataset.aodpItem, ''); // 空にする＝未登録扱いに戻す
+      renderEquipPricePage();
+    });
+  });
+
+  // 取得ボタンは廃止し、選択した瞬間に自動で価格取得する
+  grid.querySelectorAll('.aodpblock[data-aodp-item]').forEach(block=>{
+    const itemId = block.dataset.aodpItem;
+    const code = getAodpCode(itemId);
+    if(!code) return;
+    if(block.dataset.autoFetched) return; // 同じ描画内で二重取得しない
+    block.dataset.autoFetched = '1';
+    const item = items.find(i=>i.id===itemId);
+    const statusEl = block.querySelector('.aodpstatus');
+    statusEl.textContent = '価格を取得中…';
+    statusEl.className = 'aodpstatus';
+    syncItemFromAODP(item).then(count=>{
+      statusEl.textContent = count>0 ? `${count}件の価格を取得しました` : '価格が見つかりませんでした（登録し直してください）';
+      statusEl.className = 'aodpstatus ' + (count>0?'ok':'err');
+      updateTopProfit();
+    }).catch(err=>{
+      statusEl.textContent = '取得失敗: '+err.message;
+      statusEl.className = 'aodpstatus err';
     });
   });
 }
@@ -1739,6 +1974,10 @@ function renderRoutePage(){
     document.getElementById('routeQty').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
     document.getElementById('routeBudget').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
     document.getElementById('routeIncludeCaerleon').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
+    document.getElementById('routeMinVolume').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
+    document.getElementById('routeMaxVolatility').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
+    document.getElementById('routeBonusDiscount').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
+    document.getElementById('routeUseMarketData').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
   }
 
   renderCategorySidebar('route', document.getElementById('routeCategoryList'), renderRoutePage);
@@ -1751,9 +1990,10 @@ function renderRoutePage(){
     const row = document.createElement('div');
     row.className = 'itemrow';
     const selected = routeSelectedItem && routeSelectedItem.id===item.id;
+    const hasAodp = !!getAodpCode(item.id);
     row.innerHTML = `
       <img src="${item.file}" alt="${item.name}">
-      <div class="irname">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}</div>
+      <div class="irname">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}${hasAodp?'<span class="citybadge citybadge-hit">AODP連携済</span>':''}</div>
       <button type="button" class="tinybtn routepickbtn">${selected?'選択中':'この装備で計算'}</button>
     `;
     row.querySelector('.routepickbtn').addEventListener('click', ()=>{
@@ -1766,33 +2006,66 @@ function renderRoutePage(){
   if(routeSelectedItem) computeAndRenderRoutes();
 }
 
-function computeAndRenderRoutes(){
+async function computeAndRenderRoutes(){
   const wrap = document.getElementById('routeResultPanel');
   if(!routeSelectedItem){ wrap.innerHTML=''; return; }
+  const item = routeSelectedItem;
 
   const tier = Number(document.getElementById('routeTier').value);
   const ench = Number(document.getElementById('routeEnch').value);
   const qty = Math.max(1, Number(document.getElementById('routeQty').value)||1);
   const budget = Number(document.getElementById('routeBudget').value)||0;
   const includeCaerleon = document.getElementById('routeIncludeCaerleon').checked;
+  const minVolume = Number(document.getElementById('routeMinVolume').value)||0;
+  const maxVolatilityPct = document.getElementById('routeMaxVolatility').value;
+  const maxVolatility = maxVolatilityPct!=='' ? Number(maxVolatilityPct)/100 : null;
+  const bonusDayDiscount = Number(document.getElementById('routeBonusDiscount').value)||0;
+  const useMarketData = document.getElementById('routeUseMarketData').checked;
 
-  const results = recommendRoutes(routeSelectedItem, tier, ench, qty, {
+  const candidateCities = includeCaerleon ? CITIES : CITY_RING;
+  let cityStats = {};
+  const aodpCode = getAodpCode(item.id);
+
+  if(useMarketData){
+    if(!aodpCode){
+      wrap.innerHTML = `<div class="empty-hint">この装備はまだAODPと連携していません。「原価入力 &gt; 装備売値・アーティファクト」で英語名検索から候補を選ぶと、出来高・価格推移を使った分析ができるようになります。<br>（今回は市場データなしで、入力済みの売値のみを使って計算します）</div>`;
+    }else{
+      wrap.innerHTML = `<div class="empty-hint">直近の出来高・価格推移を取得中…</div>`;
+      try{
+        cityStats = await fetchMarketStatsForCities(item, tier, ench, candidateCities, 7);
+      }catch(err){
+        wrap.innerHTML = `<div class="empty-hint">市場データの取得に失敗しました: ${err.message}（市場データなしで計算します）</div>`;
+      }
+    }
+  }
+
+  const results = recommendRoutes(item, tier, ench, qty, {
     budget: budget>0 ? budget : Infinity,
     maxRiskTier: includeCaerleon ? RISK.CAERLEON : RISK.ROYAL,
     includeCaerleon,
+    cityStats,
+    minVolume: useMarketData ? minVolume : 0,
+    maxVolatility: useMarketData ? maxVolatility : null,
+    bonusDayDiscount,
   });
 
   if(results.length===0){
-    wrap.innerHTML = `<div class="empty-hint">条件に合うルートが見つかりません。売値・素材価格が都市ごとに入力されているか確認してください（「原価入力」タブで各都市の価格を入力すると候補が増えます）。</div>`;
+    wrap.innerHTML = `<div class="empty-hint">条件に合うルートが見つかりません。売値・素材価格が都市ごとに入力されているか、流動性/安定性の条件が厳しすぎないか確認してください。</div>`;
     return;
   }
 
+  const bonusNotice = results[0].isBonusToday
+    ? `<div class="note" style="margin-top:10px;">⚠ この装備の種類は本日の日替わり生産ボーナス対象として登録されています。供給過多で値崩れしやすいため、売値を${bonusDayDiscount}%割り引いて保守的に見積もっています。</div>`
+    : '';
+
   wrap.innerHTML = `
     <div class="card">
-      <h3>${routeSelectedItem.name} T${tier}.${ench} × ${qty} のおすすめルート</h3>
-      <div class="sub">利益/時間が高い順（上位10件）。距離はロイヤル都市の環状マップに基づく概算です。</div>
+      <h3>${item.name} T${tier}.${ench} × ${qty} のおすすめルート</h3>
+      <div class="sub">利益/時間が高い順（上位10件）。距離はロイヤル都市の環状マップに基づく概算です。${useMarketData && aodpCode ? '直近7日の出来高・価格推移（AODP）を考慮しています。' : ''}</div>
       <div class="routerows">
-        ${results.map((r,idx)=>`
+        ${results.map((r,idx)=>{
+          const st = r.marketStats;
+          return `
           <div class="routerow">
             <span class="rerank">${idx+1}</span>
             <div class="routepath">
@@ -1803,15 +2076,19 @@ function computeAndRenderRoutes(){
               <span class="rp-city">${CITY_LABELS_JA[r.sellCity]}</span>
               <span class="rp-arrow">売る</span>
               ${r.riskTier>0 ? '<span class="citybadge citybadge-miss" style="margin-left:8px;">⚠ カエルレオン経由</span>' : ''}
+              ${st ? `<span class="citybadge ${st.volatility<0.15?'citybadge-hit':'citybadge-miss'}" style="margin-left:6px;">出来高 ${st.avgVolume.toFixed(1)}/日</span>` : ''}
+              ${st ? `<span class="citybadge ${st.volatility<0.15?'citybadge-hit':'citybadge-miss'}">変動係数 ${(st.volatility*100).toFixed(1)}%</span>` : ''}
+              ${st && st.trend!==0 ? `<span class="citybadge ${st.trend>=0?'citybadge-hit':'citybadge-miss'}">直近${st.trend>=0?'+':''}${(st.trend*100).toFixed(1)}%</span>` : ''}
             </div>
             <div class="bstat"><span class="bk">原価</span><span class="bv">${fmt(r.materialCost)}</span></div>
-            <div class="bstat"><span class="bk">売値</span><span class="bv">${fmt(r.sellPrice*1)}</span></div>
+            <div class="bstat"><span class="bk">売値${r.isBonusToday?'(割引後)':''}</span><span class="bv">${fmt(r.sellPrice)}</span></div>
             <div class="bstat"><span class="bk">利益</span><span class="bv ${r.profit>=0?'profit-pos':'profit-neg'}">${r.profit>=0?'+':''}${fmt(r.profit)}</span></div>
             <div class="bstat"><span class="bk">概算所要時間</span><span class="bv">${(0.25*r.legs+0.15).toFixed(2)}h</span></div>
             <div class="bstat"><span class="bk">利益/時間</span><span class="bv strong ${r.profitPerHour>=0?'profit-pos':'profit-neg'}">${fmt(r.profitPerHour)}/h</span></div>
-          </div>
-        `).join('')}
+          </div>`;
+        }).join('')}
       </div>
+      ${bonusNotice}
     </div>
   `;
 }
