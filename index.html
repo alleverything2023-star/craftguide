@@ -215,13 +215,35 @@ body{
 .equipcol h5{display:flex;align-items:center;gap:7px;font-size:11.5px;line-height:1.3;}
 .colthumb{width:20px;height:20px;object-fit:contain;flex-shrink:0;}
 .aodprow{display:flex;gap:6px;margin-bottom:4px;}
-.aodprow .aodpinput{
+.aodprow .aodpsearch{
   flex:1;min-width:0;background:#0e1119;border:1px solid var(--border);color:var(--text);
   padding:5px 7px;border-radius:6px;font-size:10.5px;outline:none;
 }
-.aodpstatus{font-size:10.5px;color:var(--text-faint);display:block;margin-bottom:8px;}
+.aodprow .aodpsearch:focus{border-color:var(--gold-soft);}
+.aodpstatus{font-size:10.5px;color:var(--text-faint);display:block;margin-bottom:8px;min-height:1.3em;}
 .aodpstatus.ok{color:var(--green);}
 .aodpstatus.err{color:var(--red);}
+.aodpblock{margin-bottom:2px;}
+.aodpresults{
+  max-height:150px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;
+  margin-bottom:6px;background:#0b0e14;
+}
+.aodpresultrow{
+  padding:5px 8px;font-size:10px;cursor:pointer;border-bottom:1px solid #1a1f2b;
+  display:flex;flex-direction:column;gap:1px;
+}
+.aodpresultrow:last-child{border-bottom:none;}
+.aodpresultrow:hover{background:#171c28;}
+.aodpresult-id{color:var(--gold-soft);font-weight:700;font-family:monospace;}
+.aodpresult-name{color:var(--text-dim);}
+.aodpresult-empty{padding:8px;font-size:10px;color:var(--text-faint);}
+.aodpchip{
+  display:flex;align-items:center;gap:6px;flex-wrap:wrap;background:#123420;border:1px solid #1d5c36;
+  border-radius:7px;padding:6px 8px;margin-bottom:6px;
+}
+.aodpchip-id{font-family:monospace;font-size:10px;font-weight:700;color:#8ef0a8;}
+.aodpchip-name{font-size:10px;color:var(--text-dim);flex:1;min-width:0;}
+.aodpchangebtn{padding:2px 8px;font-size:9.5px;flex-shrink:0;}
 
 
 /* ===== ボーナスデー（原価入力タブ） ===== */
@@ -494,7 +516,8 @@ body{
     <div class="subpage" id="sub-equip" style="display:none;">
       <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
         カテゴリ→種類を選ぶと、その種類に含まれる装備の売値をT4.0〜T8.4まで一括入力できます（素材と同じ形式）。一度に開けるのは1種類だけです。
-        アーティファクト装備（🏺マーク）は、その装備専用のアーティファクト欠片の単価（T4〜T8）も同じ列の下にまとめて入力できます（欠片の種類・価格は装備ライン毎に異なるためです）。
+        アーティファクト装備（🏺マーク）は、その装備専用のアーティファクト欠片の単価（T4〜T8）も同じ列の下にまとめて入力できます（欠片の種類・価格は装備ライン毎に異なるためです）。<br>
+        各装備の上部にある検索欄でAODP（Albion Online Data Project）のアイテムを英語名で検索し、<b>候補一覧から選ぶ</b>とその装備に紐付きます（自由入力はできないため、タイポでのAPIエラーは起きません）。選ぶと自動で全都市の売値が取得されます。初回だけアイテムデータベース（約16MB）の読み込みに数秒〜数十秒かかります。
       </p>
       <div class="equipcatrow" id="equipCatRow"></div>
       <div class="subtyperow" id="equipSubtypeRow"></div>
@@ -582,10 +605,33 @@ body{
             <span class="mtlabel">カエルレオン経由も候補に含める（Risk 2）</span>
           </label>
         </div>
+        <div class="settingsbar-row" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+          <label class="minitoggle">
+            <input type="checkbox" id="routeUseMarketData" checked>
+            <span class="slider"></span>
+            <span class="mtlabel">AODPの出来高・価格推移を分析に使う</span>
+          </label>
+          <div class="field" style="max-width:170px;">
+            <label>最低出来高（個/日・売却都市）</label>
+            <input type="number" id="routeMinVolume" min="0" placeholder="0=フィルタなし" value="5">
+          </div>
+          <div class="field" style="max-width:170px;">
+            <label>許容する価格変動係数(%)</label>
+            <input type="number" id="routeMaxVolatility" min="0" placeholder="無制限" value="30">
+          </div>
+          <div class="field" style="max-width:190px;">
+            <label>ボーナスデー時の売値割引(%)</label>
+            <input type="number" id="routeBonusDiscount" min="0" max="100" value="10">
+          </div>
+        </div>
         <div class="note">
           下の一覧から装備を選ぶと、買う都市→作る都市→売る都市の組み合わせを総当たりで評価し、利益/時間が高い順に上位10件を表示します。
           距離・移動時間はロイヤル5都市の環状マップ（隣接=1、対角=2）に基づく概算です。カエルレオンは中心都市のため、原則としてルート評価（距離・時間）には含めず、
-          「カエルレオン経由も候補に含める」を有効にした場合のみ参考ルートとして表示します（この場合、カエルレオン絡みの区間距離は0として扱われます＝末尾に任意で寄る想定）。
+          「カエルレオン経由も候補に含める」を有効にした場合のみ参考ルートとして表示します（この場合、カエルレオン絡みの区間距離は0として扱われます＝末尾に任意で寄る想定）。<br>
+          「AODPの出来高・価格推移を分析に使う」を有効にすると、その装備の直近7日間の実売データ（出来高・価格の変動係数・トレンド）を売却都市ごとに取得し、
+          <b>最低出来高を下回る都市や、価格変動が荒すぎる都市は候補から除外</b>します（利益額だけでなく、実際にちゃんと売れて価格も安定しているルートを優先するためです）。この分析には対象装備が「装備売値」タブでAODPと連携済みである必要があります。<br>
+          「ボーナスデー時の売値割引」は、その装備の種類（武器種・防具種）が「原価入力 &gt; ボーナスデー」で本日の日替わり生産ボーナス対象に登録されている場合、
+          供給が増えて値崩れしやすい前提で、見積もりに使う売値をここで指定した割合だけ保守的に割り引きます（実際の値崩れ幅を保証するものではなく、あくまで安全側に倒すための概算です）。
         </div>
       </div>
       <div class="searchrow"><input type="text" id="routeSearch" placeholder="装備名で検索…（例: Royal, Knight, Bow）"></div>
