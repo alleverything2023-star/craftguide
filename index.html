@@ -533,6 +533,7 @@ body{
       <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
         日替わり生産ボーナス（+10%または+20%）は、特定の装備1個ではなく「武器種・防具種」単位（例：斧、剣、革の靴）で付与されます。ゲーム内のActivitiesメニューで確認し、該当する種類をここに登録してください。アイコンをクリックするたびに「なし→+10%→+20%→なし」と切り替わります。
       </p>
+      <div id="bonusDayInfo" class="note" style="margin-bottom:14px;"></div>
       <div class="card">
         <h3>現在ボーナス登録中の種類</h3>
         <div id="bonusActiveList" style="margin-top:10px;"></div>
@@ -581,12 +582,39 @@ body{
   </div>
 </div>
 
-<!-- ============ PAGE 4: ルート提案 (Buy -> Craft -> Sell route recommender) ============ -->
+<!-- ============ PAGE 4: ルート提案 (Buy -> Craft -> Destination route navigator) ============ -->
 <div class="page" id="page-route">
   <div class="layout">
     <div class="sidebar"><h4>装備カテゴリ</h4><div id="routeCategoryList"></div></div>
     <div class="main main wide">
+
+      <!-- カーナビ機能：全アイテム横断のまとめ生産ルート提案（相乗り提案） -->
       <div class="card settingsbar">
+        <div class="settingsbar-row">
+          <div class="field" style="max-width:190px;">
+            <label>最終目的地（スタッシュ・準備都市）</label>
+            <select id="routeNavDestination"></select>
+          </div>
+          <div class="field" style="max-width:160px;">
+            <label>最低利益（silver・任意）</label>
+            <input type="number" id="routeNavMinProfit" min="0" placeholder="0=フィルタなし" value="0">
+          </div>
+          <label class="minitoggle">
+            <input type="checkbox" id="routeNavIncludeCaerleon">
+            <span class="slider"></span>
+            <span class="mtlabel">購入・クラフトにカエルレオンも候補に含める（Risk 2）</span>
+          </label>
+        </div>
+        <div class="note">
+          売却先は常にメインの利益源である<b>ブラックマーケット（Caerleon）</b>固定、ルートの終点（ゴール）は常に上記の<b>最終目的地</b>（既定値: リムハースト）に固定して、
+          全装備を対象に「素材が最安の購入都市→利益が最大になるクラフト都市→最終目的地」のルートを自動計算します。
+          同じルートを通ることで一緒に仕入れ・製作できる高利益な装備がある場合は、まとめて表示します（積載量や資金に応じたまとめ生産にご活用ください）。
+        </div>
+      </div>
+      <div id="routeNavPanel"></div>
+
+      <!-- 個別アイテムの詳細ルート分析（市場データ・所要時間などを1品ずつ深掘り） -->
+      <div class="card settingsbar" style="margin-top:22px;">
         <div class="settingsbar-row">
           <div class="field" style="max-width:110px;">
             <label>ティア</label>
@@ -607,12 +635,7 @@ body{
           <label class="minitoggle">
             <input type="checkbox" id="routeIncludeCaerleon">
             <span class="slider"></span>
-            <span class="mtlabel">カエルレオン経由も候補に含める（Risk 2）</span>
-          </label>
-          <label class="minitoggle">
-            <input type="checkbox" id="routeIncludeBM">
-            <span class="slider"></span>
-            <span class="mtlabel">ブラックマーケット（NPC買取）も売却先候補に含める</span>
+            <span class="mtlabel">購入・クラフトにカエルレオンも候補に含める（Risk 2）</span>
           </label>
         </div>
         <div class="settingsbar-row" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
@@ -622,7 +645,7 @@ body{
             <span class="mtlabel">AODPの出来高・価格推移を分析に使う</span>
           </label>
           <div class="field" style="max-width:170px;">
-            <label>最低出来高（個/日・売却都市）</label>
+            <label>最低出来高（個/日・BM）</label>
             <input type="number" id="routeMinVolume" min="0" placeholder="0=フィルタなし" value="5">
           </div>
           <div class="field" style="max-width:170px;">
@@ -635,15 +658,13 @@ body{
           </div>
         </div>
         <div class="note">
-          下の一覧から装備を選ぶと、買う都市→作る都市→売る都市の組み合わせを総当たりで評価し、利益/時間が高い順に上位10件を表示します。
-          距離・移動時間はロイヤル5都市の環状マップ（隣接=1、対角=2）に基づく概算です。カエルレオンは中心都市のため、原則としてルート評価（距離・時間）には含めず、
-          「カエルレオン経由も候補に含める」を有効にした場合のみ参考ルートとして表示します（この場合、カエルレオン絡みの区間距離は0として扱われます＝末尾に任意で寄る想定）。<br>
-          「AODPの出来高・価格推移を分析に使う」を有効にすると、その装備の直近7日間の実売データ（出来高・価格の変動係数・トレンド）を売却都市ごとに取得し、
-          <b>最低出来高を下回る都市や、価格変動が荒すぎる都市は候補から除外</b>します（利益額だけでなく、実際にちゃんと売れて価格も安定しているルートを優先するためです）。この分析には対象装備が「装備売値」タブでAODPと連携済みである必要があります。<br>
+          個別の装備を1つ選んで、購入都市→クラフト都市の組み合わせを総当たりで評価し、利益/時間が高い順に上位10件を表示します（売却先はブラックマーケット固定、終点は上のカーナビと同じ最終目的地です）。
+          距離・移動時間はロイヤル5都市の環状マップ（隣接=1、対角=2）に基づく概算です。カエルレオンは中心都市のため、原則として距離評価には含めず、
+          「カエルレオンも候補に含める」を有効にした場合のみ、購入・クラフトの候補地として扱います。最終目的地からブラックマーケットへの搬入区間は、この概算には含めていません。<br>
+          「AODPの出来高・価格推移を分析に使う」を有効にすると、ブラックマーケットの直近7日間の実売データ（出来高・価格の変動係数・トレンド）を取得し、
+          <b>最低出来高を下回る場合や、価格変動が荒すぎる場合は候補から除外</b>します。この分析には対象装備が「装備売値」タブでAODPと連携済みである必要があります。<br>
           「ボーナスデー時の売値割引」は、その装備の種類（武器種・防具種）が「原価入力 &gt; ボーナスデー」で本日の日替わり生産ボーナス対象に登録されている場合、
-          供給が増えて値崩れしやすい前提で、見積もりに使う売値をここで指定した割合だけ保守的に割り引きます（実際の値崩れ幅を保証するものではなく、あくまで安全側に倒すための概算です）。<br>
-          「ブラックマーケット」を有効にすると、既存の買い注文を即座に埋める形での売却も候補に含めます。BMは出品手数料(2.5%)がかからず取引税のみで済む一方、
-          NPCの買取価格は入力欄（または「装備売値」タブでのAODP同期）で個別に登録した値がそのまま使われます（BMは1箇所しかないため、カエルレオンと同じ移動距離として扱います）。
+          供給が増えて値崩れしやすい前提で、見積もりに使う売値をここで指定した割合だけ保守的に割り引きます（実際の値崩れ幅を保証するものではなく、あくまで安全側に倒すための概算です）。
         </div>
       </div>
       <div class="searchrow"><input type="text" id="routeSearch" placeholder="装備名で検索…（例: Royal, Knight, Bow）"></div>
