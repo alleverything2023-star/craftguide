@@ -160,6 +160,7 @@ function defaultSettings(){
     craftingCity:'Martlock',      // どの都市のステーションでクラフトするか（ボーナス都市判定に使用）
     buyingCity:'Martlock',        // 素材・アーティファクトをどの都市で買うか（原価計算に使用）
     sellingCity:'Caerleon',       // どの都市で売るか（売値の参照・利益計算に使用）
+    destinationCity:'Lymhurst',   // 【カーナビ機能】クラフト輸送ルートの最終目的地（Caerleon搬入前のスタッシュ・準備都市）。既定値はLymhurst固定だが、UIから変更可能。
     focus:false,                  // フォーカス使用（還元率+59%）
     saleType:'quick', premium:true,
     aodpFreshnessMinutes:30,      // AODPから取得したデータのうち、この分数より古いものは自動反映しない（鮮度フィルタ）
@@ -190,7 +191,14 @@ function defaultState(){
 function loadState(){
   try{
     const raw = localStorage.getItem(LS_KEY);
-    if(raw) return Object.assign(defaultState(), JSON.parse(raw));
+    if(raw){
+      const data = JSON.parse(raw);
+      const merged = Object.assign(defaultState(), data);
+      // settings はオブジェクトごと上書きされてしまうため、新規追加された設定項目
+      // （destinationCity等）は個別にデフォルト値でマージし直す（既存の保存値は優先）。
+      merged.settings = Object.assign(defaultSettings(), data.settings || {});
+      return merged;
+    }
   }catch(e){}
 
   // v13（ブラックマーケット対応・AODP鮮度フィルタ・ボーナス履歴ログを追加する前のバージョン）からの移行
@@ -787,10 +795,23 @@ function subtypeKey(category, subtype){
 function getBonusForSubtype(category, subtype){
   return Number(STATE.bonusSubtypes[subtypeKey(category, subtype)] || 0); // 0 / 10 / 20
 }
-// 今日の日付キー（YYYY-MM-DD、端末のローカルタイムゾーン基準）
-function todayKey(){
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+// ゲーム内のデイリーボーナス切り替え時刻は「UTC 10:00（日本時間 19:00）」であり、
+// カレンダー上の日付境界（UTC 0:00 / 各端末のローカル日付境界）とはズレている。
+// そのため、実際の日時からこのオフセット分だけ巻き戻した時刻の「UTC日付」を
+// 「ゲーム内のボーナス日」として扱う。
+//   ・UTC 10:00（日本時間19:00）より前 → まだ前日分のボーナス日として扱う
+//   ・UTC 10:00（日本時間19:00）以降   → 当日分のボーナス日に切り替わる
+const BONUS_RESET_UTC_HOUR = 10; // UTC 10:00 = JST 19:00
+function getBonusGameDate(now){
+  const base = now instanceof Date ? now : new Date();
+  const shifted = new Date(base.getTime() - BONUS_RESET_UTC_HOUR*60*60*1000);
+  // ローカルタイムゾーンの影響を受けないよう、UTCのフィールドだけで日付キーを組み立てる
+  return new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()));
+}
+// 「ゲーム内のボーナス日」の日付キー（YYYY-MM-DD、UTC 10:00 / 日本時間19:00 切り替え基準）
+function todayKey(now){
+  const d = getBonusGameDate(now);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
 }
 function setBonusForSubtype(category, subtype, val){
   const key = subtypeKey(category, subtype);
@@ -1010,69 +1031,178 @@ async function fetchMarketStatsForCities(item, tier, ench, cities, days){
 }
 
 /**
- * item を tier.ench で qty 個作る場合の、買う都市→作る都市→売る都市の組み合わせを
+ * 【クラフト輸送のカーナビ】item を tier.ench で qty 個作る場合の、買う都市→作る都市の組み合わせを
  * 総当たりで評価し、利益/時間が高い順に上位を返す。
- * opts.includeCaerleon が true のときだけ、カエルレオン絡みのルート（距離は考慮せず参考値として）も候補に含める。
- * opts.cityStats: {city: {avgVolume, avgPrice, volatility, trend}} — fetchMarketStatsForCities() の戻り値。
- * opts.minVolume: 売却都市の直近平均出来高（1日あたり）がこれ未満のルートは除外する（在庫リスク回避）。
- * opts.maxVolatility: 価格変動係数がこれを超える売却都市は除外する（暴騰/暴落に惑わされないため）。
+ * ・売却先は常にメインの利益源である「ブラックマーケット（Caerleon）」に固定（BM_LOCATION）。
+ * ・ルートの終点（ゴール）は常に opts.destinationCity（既定値: STATE.settings.destinationCity＝Lymhurst）。
+ *   BMへの最終搬入（Lymhurst→Caerleon）はこのツールのルート表示には含めない
+ *   （最終目的地＝Caerleon搬入前のスタッシュ・準備都市、という運用前提のため）。
+ * opts.includeCaerleon が true のときだけ、購入・クラフトをカエルレオンで行う候補も含める（Risk 2）。
+ * opts.cityStats: {[BM_LOCATION]: {avgVolume, avgPrice, volatility, trend}} — fetchMarketStatsForCities() の戻り値。
+ * opts.minVolume: ブラックマーケットの直近平均出来高（1日あたり）がこれ未満なら除外する（在庫リスク回避）。
+ * opts.maxVolatility: 価格変動係数がこれを超える場合は除外する（暴騰/暴落に惑わされないため）。
  * opts.bonusDayDiscount: 対象アイテムの武器種/防具種が本日ボーナス対象の場合、
  *   供給過多で値崩れしやすい前提で売値をこの%だけ割り引いて保守的に見積もる。
- * opts.includeBM: true の場合、ブラックマーケット（カエルレオンのNPC買取）も売却先候補に含める。
- *   地理的にはカエルレオンにあるため、includeCaerleonがfalseの場合はBMも候補に含めない。
  */
 function recommendRoutes(item, tier, ench, qty, opts={}){
-  const {budget, maxRiskTier, includeCaerleon, includeBM, cityStats={}, minVolume=0, maxVolatility=null, bonusDayDiscount=0} = opts;
+  const {budget, maxRiskTier, includeCaerleon, cityStats={}, minVolume=0, maxVolatility=null, bonusDayDiscount=0} = opts;
+  const destinationCity = opts.destinationCity || STATE.settings.destinationCity || 'Lymhurst';
   const effBudget = budget>0 ? budget : Infinity;
   const effMaxRisk = maxRiskTier!==undefined ? maxRiskTier : RISK.ROYAL;
   const results = [];
   const candidateCities = includeCaerleon ? CITIES : CITY_RING;
-  // 売却先の候補は買う/作る都市の候補とは別に、ブラックマーケットを追加できる
-  // （BMはあくまで「売り先」であり、そこで買い物やクラフトはできないため）。
-  const sellCandidates = (includeCaerleon && includeBM) ? [...candidateCities, BM_LOCATION] : candidateCities;
+
+  // 売却先（Market）はメインの利益源であるブラックマーケット（Caerleon）に固定。
+  const sellCity = BM_LOCATION;
 
   const isBonusToday = getBonusForSubtype(item.category, item.subtype) > 0;
   const priceDiscountFactor = isBonusToday ? (1 - (Number(bonusDayDiscount)||0)/100) : 1;
 
+  const stats = cityStats[sellCity] || null;
+  if(stats){
+    if(minVolume>0 && stats.avgVolume < minVolume) return [];       // 流動性フィルタ
+    if(maxVolatility!=null && stats.volatility > maxVolatility) return []; // 安定性フィルタ
+  }
+
+  const rawSellPrice = getSellPrice(sellCity, item.id, tier, ench);
+  if(rawSellPrice<=0) return [];
+  const sellPrice = rawSellPrice * priceDiscountFactor; // ボーナスデー割引を反映した保守的な見積もり
+  const {net} = computeNetSell(sellPrice, {isBlackMarket:true});
+
   candidateCities.forEach(buyCity=>{
     candidateCities.forEach(craftCity=>{
-      sellCandidates.forEach(sellCity=>{
-        const isBM = sellCity===BM_LOCATION;
-        // BMはカエルレオンに所在するため、危険度・距離の判定ではカエルレオンとして扱う
-        const riskCity = isBM ? 'Caerleon' : sellCity;
-        const riskTier = routeRisk([buyCity, craftCity, riskCity]);
-        if(riskTier > effMaxRisk) return;
+      const riskTier = routeRisk([buyCity, craftCity]);
+      if(riskTier > effMaxRisk) return;
 
-        const stats = cityStats[sellCity] || null;
-        if(stats){
-          if(minVolume>0 && stats.avgVolume < minVolume) return;       // 流動性フィルタ
-          if(maxVolatility!=null && stats.volatility > maxVolatility) return; // 安定性フィルタ
-        }
+      const cost = computeItemCost(item, tier, ench, craftCity, buyCity);
+      const materialCost = cost.total * qty;
+      if(materialCost > effBudget) return;
 
-        const cost = computeItemCost(item, tier, ench, craftCity, buyCity);
-        const materialCost = cost.total * qty;
-        if(materialCost > effBudget) return;
+      const profit = (net - cost.total) * qty;
 
-        const rawSellPrice = getSellPrice(sellCity, item.id, tier, ench);
-        if(rawSellPrice<=0) return;
-        const sellPrice = rawSellPrice * priceDiscountFactor; // ボーナスデー割引を反映した保守的な見積もり
-        const {net} = computeNetSell(sellPrice, {isBlackMarket: isBM});
-        const profit = (net - cost.total) * qty;
+      // ルート表示（経由地）：購入都市→クラフト都市→最終目的地。連続する同一都市は畳み込む。
+      const rawWaypoints = [buyCity, craftCity, destinationCity];
+      const waypoints = rawWaypoints.filter((c,i)=>i===0||c!==rawWaypoints[i-1]);
 
-        // 移動時間モデル：リング距離の合計（カエルレオン絡み・BM経由の区間は距離評価から除外＝0扱い）
-        const legDistBuyCraft = ringDistance(buyCity, craftCity);
-        const legDistCraftSell = ringDistance(craftCity, riskCity);
-        const legs = (legDistBuyCraft||0) + (legDistCraftSell||0);
-        const estHours = 0.25*legs + 0.15; // 1リング区間=0.25時間 + クラフト等の固定時間0.15時間（目安。実測に合わせて調整可）
-        const profitPerHour = profit / estHours;
+      // 移動時間モデル：購入→クラフト→最終目的地までのリング距離の合計
+      // （カエルレオン絡みの区間、およびLymhurst→Caerleonの最終搬入は距離評価から除外＝概算に含めない）
+      const legDistBuyCraft = ringDistance(buyCity, craftCity);
+      const legDistCraftDest = ringDistance(craftCity, destinationCity);
+      const legs = (legDistBuyCraft||0) + (legDistCraftDest||0);
+      const estHours = 0.25*legs + 0.15; // 1リング区間=0.25時間 + クラフト等の固定時間0.15時間（目安。実測に合わせて調整可）
+      const profitPerHour = profit / estHours;
 
-        results.push({buyCity, craftCity, sellCity, isBM, cost, materialCost, rawSellPrice, sellPrice, profit, profitPerHour,
-                       riskTier, legs, marketStats: stats, isBonusToday});
-      });
+      results.push({buyCity, craftCity, destinationCity, waypoints, sellCity, isBM:true, cost, materialCost,
+                     rawSellPrice, sellPrice, profit, profitPerHour, riskTier, legs, marketStats: stats, isBonusToday});
     });
   });
 
   return results.sort((a,b)=>b.profitPerHour-a.profitPerHour).slice(0,10);
+}
+
+/* =======================================================================
+   【カーナビ・コア】相乗りまとめ生産ルート提案
+   ---------------------------------------------------------------------
+   全アイテムを対象に、各アイテムごとの最適ルート（素材最安都市→利益最大クラフト都市→
+   最終目的地）を算出し、同一ルート（RouteKey）ごとにグループ化する。
+   同じ移動でまとめて仕入れ・製作できる高利益アイテムを「メイン看板アイテム」＋
+   「相乗り推奨アイテム」として提示するための中核関数。
+   売却先は常にブラックマーケット（Caerleon）固定。
+========================================================================= */
+function calculateOptimalCraftRoutes(opts={}){
+  const s = STATE.settings;
+  const destinationCity = opts.destinationCity || s.destinationCity || 'Lymhurst';
+  const includeCaerleon = !!opts.includeCaerleon;
+  const candidateCities = includeCaerleon ? CITIES : CITY_RING;
+  const sellCity = BM_LOCATION; // 売却先（Market）: Caerleon（Black Market）
+  const minProfit = opts.minProfit!=null ? opts.minProfit : 0;
+  const tierList = opts.tierList || TIERS4to8;
+  const enchList = opts.enchList || ENCH;
+  const bundleLimit = opts.bundleLimit || 8;
+
+  const itemBestRoutes = [];
+
+  ITEMS.forEach(item=>{
+    let best = null; // このアイテムにとって最も利益が高い (tier, ench, 購入都市, クラフト都市) の組み合わせ
+
+    tierList.forEach(tier=>{
+      enchList.forEach(ench=>{
+        const rawSellPrice = getSellPrice(sellCity, item.id, tier, ench);
+        if(rawSellPrice<=0) return;
+        const {net} = computeNetSell(rawSellPrice, {isBlackMarket:true});
+
+        // a. 素材合計購入額が最も安い都市 (MaterialCity) を特定
+        //    （精算前の購入総額は購入都市の単価だけで決まり、クラフト都市の還元ボーナスには依存しないため、
+        //     ここでは craftingCity=buyingCity として grossTotal のみを比較する）
+        let materialCity = null, bestGrossTotal = Infinity;
+        candidateCities.forEach(buyCity=>{
+          const c = computeItemCost(item, tier, ench, buyCity, buyCity);
+          if(c.grossTotal > 0 && c.grossTotal < bestGrossTotal){
+            bestGrossTotal = c.grossTotal;
+            materialCity = buyCity;
+          }
+        });
+        if(!materialCity) return; // 価格未入力の素材はスキップ
+
+        // b. クラフトボーナス（返却率）と手数料を加味し、利益が最大となるクラフト都市 (CraftCity) を特定
+        //    （購入都市は a. で決めた MaterialCity に固定）
+        let craftBest = null;
+        candidateCities.forEach(craftCity=>{
+          const cost = computeItemCost(item, tier, ench, craftCity, materialCity);
+          const profit = net - cost.total;
+          if(!craftBest || profit > craftBest.profit) craftBest = {craftCity, cost, profit};
+        });
+        if(!craftBest || craftBest.profit <= minProfit) return;
+
+        const margin = rawSellPrice>0 ? (craftBest.profit/rawSellPrice*100) : 0;
+        if(!best || craftBest.profit > best.profit){
+          best = {
+            item, tier, ench, materialCity, craftCity: craftBest.craftCity,
+            cost: craftBest.cost, sellPrice: rawSellPrice, net, profit: craftBest.profit, margin,
+          };
+        }
+      });
+    });
+
+    if(best) itemBestRoutes.push(best);
+  });
+
+  // c. ルートキー (RouteKey) の生成：購入都市→クラフト都市→最終目的地。連続する同一都市は畳み込む
+  //    （例1: "Martlock -> Bridgewatch -> Lymhurst" 例2: "Bridgewatch -> Lymhurst"）
+  itemBestRoutes.forEach(r=>{
+    const raw = [r.materialCity, r.craftCity, destinationCity];
+    r.waypoints = raw.filter((c,i)=> i===0 || c!==raw[i-1]);
+    r.routeKey = r.waypoints.join(' -> ');
+  });
+
+  // a. 全アイテムを RouteKey ごとにグループ化
+  const routesMap = {};
+  itemBestRoutes.forEach(r=>{
+    (routesMap[r.routeKey] = routesMap[r.routeKey] || []).push(r);
+  });
+
+  // b. 各グループ内のアイテムを利益額順にソート
+  Object.values(routesMap).forEach(list => list.sort((a,b)=>b.profit-a.profit));
+
+  // c./d. メイン看板アイテムと相乗り推奨アイテムに分離し、ルート評価スコア順に並べる
+  const routeList = Object.keys(routesMap).map(routeKey=>{
+    const list = routesMap[routeKey];
+    const primaryItem = list[0];
+    const bundleItems = list.slice(1, 1+bundleLimit);
+    const routeScore = [primaryItem, ...bundleItems].reduce((sum,r)=>sum+r.profit, 0);
+    return {
+      routeKey,
+      waypoints: primaryItem.waypoints,
+      primaryItem,
+      bundleItems,
+      otherItemCount: Math.max(0, list.length - 1 - bundleItems.length),
+      totalItemsOnRoute: list.length,
+      routeScore,
+    };
+  });
+
+  routeList.sort((a,b)=>b.routeScore-a.routeScore);
+  return routeList;
 }
 
 /* ---------------------------------------------------------------------
@@ -1454,6 +1584,22 @@ function bindAodpBlockEvents(grid, items){
 let bonusCategory = 'weapon';
 
 function renderBonusPage(){
+  // ゲーム内のボーナス切り替え時刻（UTC 10:00 / 日本時間19:00）を基準にした「現在のボーナス日」と、
+  // 次回切り替わりまでの残り時間を表示する（カレンダー日付とズレることを利用者に明示するため）。
+  const infoWrap = document.getElementById('bonusDayInfo');
+  if(infoWrap){
+    const now = new Date();
+    const gameDateKey = todayKey(now);
+    const nextResetUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), BONUS_RESET_UTC_HOUR, 0, 0));
+    if(nextResetUTC.getTime() <= now.getTime()) nextResetUTC.setUTCDate(nextResetUTC.getUTCDate()+1);
+    const msLeft = nextResetUTC.getTime() - now.getTime();
+    const hLeft = Math.floor(msLeft/3600000);
+    const mLeft = Math.floor((msLeft%3600000)/60000);
+    const nextResetJST = new Date(nextResetUTC.getTime() + 9*60*60*1000);
+    const jstStr = `${nextResetJST.getUTCFullYear()}-${String(nextResetJST.getUTCMonth()+1).padStart(2,'0')}-${String(nextResetJST.getUTCDate()).padStart(2,'0')} 19:00 (JST)`;
+    infoWrap.innerHTML = `📅 現在のボーナス日: <b>${gameDateKey}</b>（UTC 10:00 / 日本時間19:00 切り替え基準） ・ 次回切り替わりまで残り <b>${hLeft}時間${mLeft}分</b>（${jstStr}）`;
+  }
+
   // 現在登録中の一覧
   const activeKeys = Object.keys(STATE.bonusSubtypes);
   const activeWrap = document.getElementById('bonusActiveList');
@@ -2117,12 +2263,13 @@ function renderRoutePage(){
     document.getElementById('routeQty').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
     document.getElementById('routeBudget').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
     document.getElementById('routeIncludeCaerleon').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
-    document.getElementById('routeIncludeBM').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
     document.getElementById('routeMinVolume').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
     document.getElementById('routeMaxVolatility').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
     document.getElementById('routeBonusDiscount').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
     document.getElementById('routeUseMarketData').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
   }
+
+  renderRouteNavPanel();
 
   renderCategorySidebar('route', document.getElementById('routeCategoryList'), renderRoutePage);
 
@@ -2154,21 +2301,21 @@ async function computeAndRenderRoutes(){
   const wrap = document.getElementById('routeResultPanel');
   if(!routeSelectedItem){ wrap.innerHTML=''; return; }
   const item = routeSelectedItem;
+  const s = STATE.settings;
+  const destinationCity = s.destinationCity || 'Lymhurst';
 
   const tier = Number(document.getElementById('routeTier').value);
   const ench = Number(document.getElementById('routeEnch').value);
   const qty = Math.max(1, Number(document.getElementById('routeQty').value)||1);
   const budget = Number(document.getElementById('routeBudget').value)||0;
   const includeCaerleon = document.getElementById('routeIncludeCaerleon').checked;
-  const includeBM = document.getElementById('routeIncludeBM').checked && includeCaerleon;
   const minVolume = Number(document.getElementById('routeMinVolume').value)||0;
   const maxVolatilityPct = document.getElementById('routeMaxVolatility').value;
   const maxVolatility = maxVolatilityPct!=='' ? Number(maxVolatilityPct)/100 : null;
   const bonusDayDiscount = Number(document.getElementById('routeBonusDiscount').value)||0;
   const useMarketData = document.getElementById('routeUseMarketData').checked;
 
-  const candidateCities = includeCaerleon ? CITIES : CITY_RING;
-  const statCities = includeBM ? [...candidateCities, BM_LOCATION] : candidateCities;
+  // 売却先は常にブラックマーケット（Caerleon）固定なので、市場データもBM分だけ取得すればよい。
   let cityStats = {};
   const aodpCode = getAodpCode(item.id);
 
@@ -2176,9 +2323,9 @@ async function computeAndRenderRoutes(){
     if(!aodpCode){
       wrap.innerHTML = `<div class="empty-hint">この装備はまだAODPと連携していません。「原価入力 &gt; 装備売値・アーティファクト」で英語名検索から候補を選ぶと、出来高・価格推移を使った分析ができるようになります。<br>（今回は市場データなしで、入力済みの売値のみを使って計算します）</div>`;
     }else{
-      wrap.innerHTML = `<div class="empty-hint">直近の出来高・価格推移を取得中…</div>`;
+      wrap.innerHTML = `<div class="empty-hint">直近の出来高・価格推移（ブラックマーケット）を取得中…</div>`;
       try{
-        cityStats = await fetchMarketStatsForCities(item, tier, ench, statCities, 7);
+        cityStats = await fetchMarketStatsForCities(item, tier, ench, [BM_LOCATION], 7);
       }catch(err){
         wrap.innerHTML = `<div class="empty-hint">市場データの取得に失敗しました: ${err.message}（市場データなしで計算します）</div>`;
       }
@@ -2189,7 +2336,7 @@ async function computeAndRenderRoutes(){
     budget: budget>0 ? budget : Infinity,
     maxRiskTier: includeCaerleon ? RISK.CAERLEON : RISK.ROYAL,
     includeCaerleon,
-    includeBM,
+    destinationCity,
     cityStats,
     minVolume: useMarketData ? minVolume : 0,
     maxVolatility: useMarketData ? maxVolatility : null,
@@ -2197,7 +2344,7 @@ async function computeAndRenderRoutes(){
   });
 
   if(results.length===0){
-    wrap.innerHTML = `<div class="empty-hint">条件に合うルートが見つかりません。売値・素材価格が都市ごとに入力されているか、流動性/安定性の条件が厳しすぎないか確認してください。</div>`;
+    wrap.innerHTML = `<div class="empty-hint">条件に合うルートが見つかりません。ブラックマーケットの売値・素材価格が都市ごとに入力されているか、流動性/安定性の条件が厳しすぎないか確認してください。</div>`;
     return;
   }
 
@@ -2207,29 +2354,34 @@ async function computeAndRenderRoutes(){
 
   wrap.innerHTML = `
     <div class="card">
-      <h3>${item.name} T${tier}.${ench} × ${qty} のおすすめルート</h3>
-      <div class="sub">利益/時間が高い順（上位10件）。距離はロイヤル都市の環状マップに基づく概算です。${useMarketData && aodpCode ? '直近7日の出来高・価格推移（AODP）を考慮しています。' : ''}</div>
+      <h3>${item.name} T${tier}.${ench} × ${qty} のおすすめルート（最終目的地: ${CITY_LABELS_JA[destinationCity]||destinationCity}）</h3>
+      <div class="sub">
+        利益/時間が高い順（上位10件）。売却先は${BM_LABEL_JA}固定です。距離はロイヤル都市の環状マップに基づく概算で、
+        ${CITY_LABELS_JA[destinationCity]||destinationCity}から${BM_LABEL_JA}（Caerleon）への最終搬入は別途の任意ルートとして計算に含めていません。
+        ${useMarketData && aodpCode ? '直近7日の出来高・価格推移（AODP・BM）を考慮しています。' : ''}
+      </div>
       <div class="routerows">
         ${results.map((r,idx)=>{
           const st = r.marketStats;
+          const pathHtml = r.waypoints.map((c,i)=>{
+            const isLast = i===r.waypoints.length-1;
+            const isCraftLeg = c===r.craftCity && r.cost.cityBonus;
+            return `<span class="rp-city${isLast?' rp-bonus':''}">${CITY_LABELS_JA[c]||c}${isCraftLeg?' 🏙':''}</span>`
+                 + (i<r.waypoints.length-1 ? '<span class="rp-arrow">➔</span>' : '');
+          }).join('');
           return `
           <div class="routerow">
             <span class="rerank">${idx+1}</span>
             <div class="routepath">
-              <span class="rp-city">${CITY_LABELS_JA[r.buyCity]}</span>
-              <span class="rp-arrow">買う→</span>
-              <span class="rp-city ${r.cost.cityBonus?'rp-bonus':''}">${CITY_LABELS_JA[r.craftCity]}${r.cost.cityBonus?' 🏙':''}</span>
-              <span class="rp-arrow">作る→</span>
-              <span class="rp-city">${r.isBM ? BM_LABEL_JA+'🏴' : CITY_LABELS_JA[r.sellCity]}</span>
-              <span class="rp-arrow">売る</span>
-              ${r.riskTier>0 ? '<span class="citybadge citybadge-miss" style="margin-left:8px;">⚠ カエルレオン経由</span>' : ''}
-              ${r.isBM ? '<span class="citybadge citybadge-hit" style="margin-left:6px;">BM: 出品手数料なし</span>' : ''}
-              ${st ? `<span class="citybadge ${st.volatility<0.15?'citybadge-hit':'citybadge-miss'}" style="margin-left:6px;">出来高 ${st.avgVolume.toFixed(1)}/日</span>` : ''}
+              ${pathHtml}
+              <span class="citybadge citybadge-hit" style="margin-left:8px;">売却: ${BM_LABEL_JA}🏴</span>
+              ${r.riskTier>0 ? '<span class="citybadge citybadge-miss">⚠ カエルレオン経由（購入/クラフト）</span>' : ''}
+              ${st ? `<span class="citybadge ${st.volatility<0.15?'citybadge-hit':'citybadge-miss'}">出来高 ${st.avgVolume.toFixed(1)}/日</span>` : ''}
               ${st ? `<span class="citybadge ${st.volatility<0.15?'citybadge-hit':'citybadge-miss'}">変動係数 ${(st.volatility*100).toFixed(1)}%</span>` : ''}
               ${st && st.trend!==0 ? `<span class="citybadge ${st.trend>=0?'citybadge-hit':'citybadge-miss'}">直近${st.trend>=0?'+':''}${(st.trend*100).toFixed(1)}%</span>` : ''}
             </div>
             <div class="bstat"><span class="bk">原価</span><span class="bv">${fmt(r.materialCost)}</span></div>
-            <div class="bstat"><span class="bk">売値${r.isBonusToday?'(割引後)':''}</span><span class="bv">${fmt(r.sellPrice)}</span></div>
+            <div class="bstat"><span class="bk">売値(BM)${r.isBonusToday?'(割引後)':''}</span><span class="bv">${fmt(r.sellPrice)}</span></div>
             <div class="bstat"><span class="bk">利益</span><span class="bv ${r.profit>=0?'profit-pos':'profit-neg'}">${r.profit>=0?'+':''}${fmt(r.profit)}</span></div>
             <div class="bstat"><span class="bk">概算所要時間</span><span class="bv">${(0.25*r.legs+0.15).toFixed(2)}h</span></div>
             <div class="bstat"><span class="bk">利益/時間</span><span class="bv strong ${r.profitPerHour>=0?'profit-pos':'profit-neg'}">${fmt(r.profitPerHour)}/h</span></div>
@@ -2239,6 +2391,98 @@ async function computeAndRenderRoutes(){
       ${bonusNotice}
     </div>
   `;
+}
+
+/* =======================================================================
+   まとめ生産ルートナビ（カーナビのついで寄り道機能）の描画
+   calculateOptimalCraftRoutes() の結果をルートカード形式で一覧表示する。
+======================================================================= */
+function routeNavItemRowHtml(entry, isPrimary, addIdx){
+  return `
+    <div class="recorow" style="${isPrimary?'border-color:var(--gold-soft);':''}">
+      <span class="rerank">${isPrimary?'👑':'🛒'}</span>
+      <img src="${entry.item.file}" alt="${entry.item.name}">
+      <div class="irname">${entry.item.name} <span class="retier">T${entry.tier}.${entry.ench}</span>${isArtifactItem(entry.item)?'<span class="tag-artifact">Artifact</span>':''}</div>
+      <div class="bstat"><span class="bk">原価</span><span class="bv">${fmt(entry.cost.total)}</span></div>
+      <div class="bstat"><span class="bk">売値(BM)</span><span class="bv">${fmt(entry.sellPrice)}</span></div>
+      <div class="bstat"><span class="bk">利益</span><span class="bv strong ${entry.profit>=0?'profit-pos':'profit-neg'}">${entry.profit>=0?'+':''}${fmt(entry.profit)}</span></div>
+      <div class="bstat"><span class="bk">利益率</span><span class="bv ${entry.margin>=0?'profit-pos':'profit-neg'}">${entry.margin.toFixed(1)}%</span></div>
+      <button type="button" class="tinybtn routenav-addbtn" data-idx="${addIdx}">作成リストに追加</button>
+    </div>`;
+}
+
+function routeNavCardHtml(route, routeIdx){
+  const pathHtml = route.waypoints.map((c,i)=>{
+    const isLast = i===route.waypoints.length-1;
+    return `<span class="rp-city${isLast?' rp-bonus':''}">${CITY_LABELS_JA[c]||c}</span>`
+         + (i<route.waypoints.length-1 ? '<span class="rp-arrow">➔</span>' : '');
+  }).join('');
+
+  return `
+    <div class="routerow" style="flex-direction:column;align-items:stretch;">
+      <div class="routepath" style="font-size:13.5px;">
+        ${pathHtml}
+        <span class="citybadge citybadge-hit" style="margin-left:8px;">このルートの合計利益 ${fmt(route.routeScore)}</span>
+        ${route.otherItemCount>0 ? `<span class="citybadge">他にも${route.otherItemCount}件、同ルートで利益が出る装備あり</span>` : ''}
+      </div>
+      ${routeNavItemRowHtml(route.primaryItem, true, `${routeIdx}:-1`)}
+      ${route.bundleItems.map((b,i)=>routeNavItemRowHtml(b, false, `${routeIdx}:${i}`)).join('')}
+    </div>
+  `;
+}
+
+function renderRouteNavPanel(){
+  const wrap = document.getElementById('routeNavPanel');
+  if(!wrap) return;
+  const s = STATE.settings;
+
+  const destSel = document.getElementById('routeNavDestination');
+  if(destSel && !destSel.dataset.filled){
+    destSel.innerHTML = CITIES.filter(c=>c!=='Caerleon').map(c=>`<option value="${c}">${CITY_LABELS_JA[c]}</option>`).join('');
+    destSel.value = s.destinationCity || 'Lymhurst';
+    destSel.dataset.filled = '1';
+    destSel.addEventListener('change', e=>{
+      s.destinationCity = e.target.value;
+      saveState();
+      renderRouteNavPanel();
+    });
+    document.getElementById('routeNavIncludeCaerleon').addEventListener('change', renderRouteNavPanel);
+    document.getElementById('routeNavMinProfit').addEventListener('change', renderRouteNavPanel);
+  }
+
+  const destinationCity = s.destinationCity || 'Lymhurst';
+  const includeCaerleon = document.getElementById('routeNavIncludeCaerleon').checked;
+  const minProfit = Number(document.getElementById('routeNavMinProfit').value)||0;
+
+  const routes = calculateOptimalCraftRoutes({destinationCity, includeCaerleon, minProfit});
+
+  if(routes.length===0){
+    wrap.innerHTML = `<div class="empty-hint">まとめ生産ルートが見つかりません。「原価入力」タブでブラックマーケットの売値・都市別の素材価格を入力してください。</div>`;
+    return;
+  }
+
+  const top = routes.slice(0, 12);
+
+  wrap.innerHTML = `
+    <div class="card">
+      <h3>🧭 まとめ生産ルートナビ（相乗り提案）</h3>
+      <div class="sub">
+        売却先は${BM_LABEL_JA}固定・ルートの終点（最終目的地）は<b>${CITY_LABELS_JA[destinationCity]||destinationCity}</b>で全装備を計算し、
+        同じ経路で一緒に仕入れ・製作できる高利益装備をルート単位でまとめています（ルート合計利益が高い順・上位${top.length}ルート）。
+        各ルートの👑がそのルートで最も利益額が高いメインアイテム、🛒が同じ移動で相乗りできるおすすめアイテムです。
+      </div>
+      ${top.map((route,idx)=>routeNavCardHtml(route, idx)).join('')}
+    </div>
+  `;
+
+  wrap.querySelectorAll('.routenav-addbtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const [ri, ii] = btn.dataset.idx.split(':').map(Number);
+      const route = top[ri];
+      const entry = ii===-1 ? route.primaryItem : route.bundleItems[ii];
+      addToCraftList(entry.item.id, entry.tier, entry.ench, 1);
+    });
+  });
 }
 
 /* =======================================================================
