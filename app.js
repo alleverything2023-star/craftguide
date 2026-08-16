@@ -117,9 +117,9 @@ const CITY_COLORS = {
 };
 
 // 価格入力（精製素材・装備売値・アーティファクト）で選べる都市。
-// ユーザーの運用（マートロック／リムハーストで仕入れ・クラフトし、ブラックマーケットで売却）に合わせて
-// この2都市のみに絞っている（ブラックマーケット売値は別枠で常時1つだけ表示するため、ここには含めない）。
-const PRICE_ENTRY_CITIES = ['Martlock', 'Lymhurst'];
+// 全都市（ロイヤル5都市＋カエルレオン）を対象とする。ブラックマーケット売値は別枠で
+// 都市選択に関わらず常時1つだけ表示する（PRICE_ENTRY_CITIESには含めない）。
+const PRICE_ENTRY_CITIES = CITIES;
 
 /* ---------------------------------------------------------------------
    ブラックマーケット（カエルレオン内のNPC買取所）
@@ -1329,19 +1329,19 @@ document.getElementById('aodpSyncMaterialsBtn').addEventListener('click', async 
 /* =======================================================================
    価格入力の対象都市（精製素材・装備売値・アーティファクトで共有）
 ======================================================================= */
-let priceEntryCity = 'Martlock';
+let priceEntryCity = 'Lymhurst';
 
 function renderPriceCitySelector(){
   const wrap = document.getElementById('priceCityRow');
   if(!wrap) return;
-  // 運用フロー（マートロック/リムハーストで仕入れ・クラフト → ブラックマーケットで売却）が
-  // ひと目でわかるよう、都市ボタンはこの2つだけに絞り、末尾に「→ ブラックマーケット」を固定表示する。
+  // 通常都市（ロイヤル5都市＋カエルレオン）は都市ボタンで切り替え、
+  // ブラックマーケットは別枠として常に1つだけ固定表示する。
   wrap.innerHTML = PRICE_ENTRY_CITIES.map(c=>
-    `<button type="button" class="citybtn${c===priceEntryCity?' active':''}">${CITY_LABELS_JA[c]}</button>`
+    `<button type="button" class="citybtn${c===priceEntryCity?' active':''}" data-city="${c}">${CITY_LABELS_JA[c]}</button>`
   ).join('') + `<span class="citybadge citybadge-hit" style="margin-left:8px;">➔ ${BM_LABEL_JA}（売却・常時1つの入力欄）</span>`;
-  wrap.querySelectorAll('.citybtn').forEach((btn,i)=>{
+  wrap.querySelectorAll('.citybtn').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      priceEntryCity = PRICE_ENTRY_CITIES[i];
+      priceEntryCity = btn.dataset.city;
       renderPriceCitySelector();
       buildRefinedGrid();
       renderEquipPricePage();
