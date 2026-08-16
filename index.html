@@ -661,6 +661,21 @@ body{
     <div class="sidebar"><h4>装備カテゴリ</h4><div id="buildCategoryList"></div></div>
     <div class="main main wide">
       <div id="buildSettingsBar"></div>
+      <div class="card settingsbar" id="buildBudgetCard">
+        <div class="settingsbar-row">
+          <div class="field" style="max-width:200px;">
+            <label>資金（silver）</label>
+            <input type="number" id="buildBudgetInput" min="0" placeholder="例: 500000">
+          </div>
+          <button type="button" class="tinybtn" id="buildBudgetAllocateBtn">💰 資金内で製造量を自動決定（利益率順）</button>
+        </div>
+        <div class="note">
+          ブラックマーケットの売値が入力済みの装備を<b>利益率が高い順</b>に選び、装備ごとの「販売数分析タブのおすすめ製造個数 × 1.2」を<b>マックス</b>として、
+          資金が尽きるまで作成リストに追加します。この自動追加はマックスを超えません（すでにマックス以上を手動追加している装備はスキップします）。
+          通常どおり自分でリストへ「追加」する分はこれまで通りマックスを超えてもかまいません。
+        </div>
+        <div id="buildBudgetResult" style="margin-top:8px;"></div>
+      </div>
       <div class="grid2 build">
         <div>
           <div class="searchrow"><input type="text" id="buildSearch" placeholder="装備名で検索…（例: Royal, Knight, Bow）"></div>
@@ -710,6 +725,23 @@ body{
         </div>
       </div>
       <div id="routeNavPanel"></div>
+
+      <!-- 資金ベースの自動ルート提案（利益率順にマックスまで製造量を決定してからルート化） -->
+      <div class="card settingsbar" id="routeBudgetCard" style="margin-top:22px;">
+        <div class="settingsbar-row">
+          <div class="field" style="max-width:200px;">
+            <label>資金（silver）</label>
+            <input type="number" id="routeBudgetAllocInput" min="0" placeholder="例: 500000">
+          </div>
+          <button type="button" class="tinybtn" id="routeBudgetAllocateBtn">💰 資金からルート提案を自動作成</button>
+        </div>
+        <div class="note">
+          ブラックマーケットの売値が入力済みの装備を<b>利益率が高い順</b>に選び、装備ごとの「販売数分析タブのおすすめ製造個数 × 1.2」を<b>マックス</b>として、
+          資金が尽きるまで作成リストに追加したうえで、現在の作成リスト全体（この機能で追加した分＋すでに手動で追加している分）をもとに、
+          <b>どこで何を何個買うか・どこで何個作るか</b>をルートごとにまとめて提案します。
+        </div>
+        <div id="routeBudgetResult" style="margin-top:8px;"></div>
+      </div>
 
       <!-- 個別アイテムの詳細ルート分析（市場データ・所要時間などを1品ずつ深掘り） -->
       <div class="card settingsbar" style="margin-top:22px;">
@@ -788,8 +820,8 @@ body{
             <select id="trendEnch"></select>
           </div>
           <div class="field" style="max-width:190px;">
-            <label>分析する売却先</label>
-            <select id="trendLocation"></select>
+            <label>分析する売却先（固定）</label>
+            <select id="trendLocation" disabled></select>
           </div>
           <div class="field" style="max-width:130px;">
             <label>分析期間(日)</label>
@@ -797,6 +829,8 @@ body{
           </div>
         </div>
         <div class="note">
+          売却先は常にメインの利益源である<b>ブラックマーケット固定</b>です。下の装備リストには<b>ブラックマーケットの売値を入力済みの装備のみ</b>を表示します
+          （「原価入力 &gt; 装備売値・アーティファクト」でブラックマーケットの売値を入力すると、ここに表示されるようになります）。<br>
           AODP（アジアサーバー）の日次データから、選んだ装備の<b>出来高（販売数の目安）と平均売値の推移</b>を確認できます。
           あわせて「原価入力 &gt; ボーナスデー」で登録した日替わり生産ボーナスの実績ログと突き合わせ、ボーナス対象だった日とそうでない日で
           販売数・売値にどれくらい差が出ているかを表示します。<br>
