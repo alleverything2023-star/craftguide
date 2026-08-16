@@ -77,6 +77,13 @@ function isArtifactItem(item){
   return !!(item.materials && item.materials.artifact > 0);
 }
 
+// アーティファクト（欠片）が不要な装備を先に、必要な装備を後に並べ替える。
+// 装備入力（価格グリッド・作成リスト等のアイテム一覧）で、まず揃えやすい通常装備から
+// 目を通せるようにするための並び替え。
+function sortByArtifactNeed(items){
+  return [...items].sort((a,b)=> (isArtifactItem(a)?1:0) - (isArtifactItem(b)?1:0));
+}
+
 /* ---------------------------------------------------------------------
    ロイヤル都市とボーナス都市（精錬・製作）のマッピング
    ユーザー提示のマスターデータに準拠。
@@ -86,6 +93,33 @@ const CITY_LABELS_JA = {
   Martlock:'マートロック', Thetford:'セットフォード', FortSterling:'フォートスターリング',
   Lymhurst:'リムハースト', Bridgewatch:'ブリッジウォッチ', Caerleon:'カエルレオン',
 };
+
+// 🧭 カーナビ機能用：ロイヤル大陸マップ画像（images/map/albion-royal-map.jpg、800x450）上での
+// 各都市の旗の位置（%指定）。画像にグリッドを重ねて実測した座標を基準にしている。
+const CITY_MAP_COORDS = {
+  Thetford:     {x:37.5,  y:19.6},  // 紫（沼地・北西）
+  FortSterling: {x:61.25, y:26.2},  // 白（雪山・北）
+  Martlock:     {x:25,    y:38.2},  // 青（高地・西）
+  Caerleon:     {x:50,    y:45.6},  // 赤黒（中央）
+  Lymhurst:     {x:78.1,  y:48.4},  // 緑（森林・東）
+  Bridgewatch:  {x:44.4,  y:66.0},  // 橙（砂漠・南）
+};
+
+// 各都市のテーマカラー（ゲーム内の旗の色に準拠）。ボーナス都市を装備入力カードの縁の色で
+// ひと目で分かるようにするために使う。
+const CITY_COLORS = {
+  Thetford:     '#a855f7', // 紫（沼地）
+  FortSterling: '#e5e7eb', // 白（雪山）
+  Martlock:     '#5b9dff', // 青（高地）
+  Caerleon:     '#ef4444', // 赤（中央・カエルレオン）
+  Lymhurst:     '#4ade80', // 緑（森林）
+  Bridgewatch:  '#f0a930', // 橙（砂漠）
+};
+
+// 価格入力（精製素材・装備売値・アーティファクト）で選べる都市。
+// ユーザーの運用（マートロック／リムハーストで仕入れ・クラフトし、ブラックマーケットで売却）に合わせて
+// この2都市のみに絞っている（ブラックマーケット売値は別枠で常時1つだけ表示するため、ここには含めない）。
+const PRICE_ENTRY_CITIES = ['Martlock', 'Lymhurst'];
 
 /* ---------------------------------------------------------------------
    ブラックマーケット（カエルレオン内のNPC買取所）
@@ -159,7 +193,10 @@ function defaultSettings(){
     tier:4, ench:0,               // 作成リストで実際に作るティア・補正段階
     craftingCity:'Martlock',      // どの都市のステーションでクラフトするか（ボーナス都市判定に使用）
     buyingCity:'Martlock',        // 素材・アーティファクトをどの都市で買うか（原価計算に使用）
-    sellingCity:'Caerleon',       // どの都市で売るか（売値の参照・利益計算に使用）
+    sellingCity:BM_LOCATION,      // どの都市で売るか（売値の参照・利益計算に使用）。
+                                   // メインの利益源はブラックマーケットのため既定値をBM固定にしている
+                                   // （旧デフォルトは'Caerleon'だったが、これはBM_LOCATIONとは別キーのため、
+                                   //   BM売値しか入力していない運用だと「おすすめ」等が常に0件になってしまう不具合があった）。
     destinationCity:'Lymhurst',   // 【カーナビ機能】クラフト輸送ルートの最終目的地（Caerleon搬入前のスタッシュ・準備都市）。既定値はLymhurst固定だが、UIから変更可能。
     focus:false,                  // フォーカス使用（還元率+59%）
     saleType:'quick', premium:true,
@@ -197,6 +234,14 @@ function loadState(){
       // settings はオブジェクトごと上書きされてしまうため、新規追加された設定項目
       // （destinationCity等）は個別にデフォルト値でマージし直す（既存の保存値は優先）。
       merged.settings = Object.assign(defaultSettings(), data.settings || {});
+      // 旧デフォルト値だった sellingCity:'Caerleon' は BM_LOCATION（'BlackMarket'）とは別キーのため、
+      // ブラックマーケット売値しか入力していない運用だと「おすすめ」等が常に0件になってしまう不具合があった。
+      // 既存データがこの旧デフォルト値のままの場合は、新デフォルトのBM固定に自動で寄せる
+      // （ユーザーが意図的に「カエルレオン（通常都市）」を選び直していた場合は上書きしない…が、
+      //   通常都市としてのCaerleonは売却先候補として実質使われていないため、実害はない）。
+      if(merged.settings.sellingCity === 'Caerleon'){
+        merged.settings.sellingCity = BM_LOCATION;
+      }
       return merged;
     }
   }catch(e){}
@@ -1289,12 +1334,14 @@ let priceEntryCity = 'Martlock';
 function renderPriceCitySelector(){
   const wrap = document.getElementById('priceCityRow');
   if(!wrap) return;
-  wrap.innerHTML = CITIES.map(c=>
-    `<button type="button" class="citybtn${c===priceEntryCity?' active':''}" data-city="${c}">${CITY_LABELS_JA[c]}</button>`
-  ).join('');
-  wrap.querySelectorAll('.citybtn').forEach(btn=>{
+  // 運用フロー（マートロック/リムハーストで仕入れ・クラフト → ブラックマーケットで売却）が
+  // ひと目でわかるよう、都市ボタンはこの2つだけに絞り、末尾に「→ ブラックマーケット」を固定表示する。
+  wrap.innerHTML = PRICE_ENTRY_CITIES.map(c=>
+    `<button type="button" class="citybtn${c===priceEntryCity?' active':''}">${CITY_LABELS_JA[c]}</button>`
+  ).join('') + `<span class="citybadge citybadge-hit" style="margin-left:8px;">➔ ${BM_LABEL_JA}（売却・常時1つの入力欄）</span>`;
+  wrap.querySelectorAll('.citybtn').forEach((btn,i)=>{
     btn.addEventListener('click', ()=>{
-      priceEntryCity = btn.dataset.city;
+      priceEntryCity = PRICE_ENTRY_CITIES[i];
       renderPriceCitySelector();
       buildRefinedGrid();
       renderEquipPricePage();
@@ -1367,7 +1414,7 @@ function renderEquipPricePage(){
   const groups = order.map(sub=>({
     sub,
     label: sub===null ? (CATS.find(c=>c.id===equipCategory)||{}).label : (SUBTYPE_LABELS[sub]||sub),
-    items: ITEMS.filter(i=>i.category===equipCategory && i.subtype===sub),
+    items: sortByArtifactNeed(ITEMS.filter(i=>i.category===equipCategory && i.subtype===sub)),
   })).filter(g=>g.items.length>0);
 
   if(groups.length===1 && groups[0].sub===null){
@@ -1406,7 +1453,17 @@ function renderEquipGrid(panelWrap, g){
   g.items.forEach(item=>{
     const col = document.createElement('div');
     col.className = 'pricecol equipcol';
+    // ボーナス都市が分かるよう、カードの縁をその都市のテーマカラーで着色する
+    const bonusCity = getBonusCity(item);
+    const bonusColor = bonusCity ? CITY_COLORS[bonusCity] : null;
+    if(bonusColor){
+      col.style.borderColor = bonusColor;
+      col.style.boxShadow = `inset 0 0 0 1px ${bonusColor}55`;
+    }
     let html = `<h5><img class="colthumb" src="${item.file}" alt="">${item.name}${isArtifactItem(item)?'<span class="tag-artifact">Artifact</span>':''}</h5>`;
+    if(bonusCity){
+      html += `<div class="citybonusrow"><span class="citybonusdot" style="background:${bonusColor};"></span>ボーナス都市: ${CITY_LABELS_JA[bonusCity]}</div>`;
+    }
     html += renderAodpBlockHtml(item);
     html += `<div class="prow subtle" style="padding-top:6px;"><label style="font-weight:700;color:var(--text-faint);">売値</label></div>`;
     TIERS4to8.forEach(t=>{
@@ -1818,7 +1875,7 @@ function buildGroups(category, list){
   return order.map(sub=>({
     sub,
     label: sub===null ? (CATS.find(c=>c.id===category)||{}).label : (SUBTYPE_LABELS[sub] || sub),
-    items: list.filter(i=>i.subtype===sub),
+    items: sortByArtifactNeed(list.filter(i=>i.subtype===sub)),
   })).filter(g=>g.items.length>0);
 }
 
@@ -2269,6 +2326,7 @@ function renderRoutePage(){
     document.getElementById('routeUseMarketData').addEventListener('change', ()=>{ if(routeSelectedItem) computeAndRenderRoutes(); });
   }
 
+  renderNavPanel();
   renderRouteNavPanel();
 
   renderCategorySidebar('route', document.getElementById('routeCategoryList'), renderRoutePage);
@@ -2385,12 +2443,23 @@ async function computeAndRenderRoutes(){
             <div class="bstat"><span class="bk">利益</span><span class="bv ${r.profit>=0?'profit-pos':'profit-neg'}">${r.profit>=0?'+':''}${fmt(r.profit)}</span></div>
             <div class="bstat"><span class="bk">概算所要時間</span><span class="bv">${(0.25*r.legs+0.15).toFixed(2)}h</span></div>
             <div class="bstat"><span class="bk">利益/時間</span><span class="bv strong ${r.profitPerHour>=0?'profit-pos':'profit-neg'}">${fmt(r.profitPerHour)}/h</span></div>
+            <button type="button" class="navstartbtn" data-ridx="${idx}">🧭 開始</button>
           </div>`;
         }).join('')}
       </div>
       ${bonusNotice}
     </div>
   `;
+
+  wrap.querySelectorAll('.navstartbtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const idx = Number(btn.dataset.ridx);
+      const r = results[idx];
+      startNav(r.buyCity, r.craftCity, r.destinationCity, r.waypoints, [
+        {item, tier, ench, profit:r.profit, sellPrice:r.sellPrice}
+      ]);
+    });
+  });
 }
 
 /* =======================================================================
@@ -2424,6 +2493,7 @@ function routeNavCardHtml(route, routeIdx){
         ${pathHtml}
         <span class="citybadge citybadge-hit" style="margin-left:8px;">このルートの合計利益 ${fmt(route.routeScore)}</span>
         ${route.otherItemCount>0 ? `<span class="citybadge">他にも${route.otherItemCount}件、同ルートで利益が出る装備あり</span>` : ''}
+        <button type="button" class="navstartbtn" data-route="${routeIdx}">🧭 このルートを開始</button>
       </div>
       ${routeNavItemRowHtml(route.primaryItem, true, `${routeIdx}:-1`)}
       ${route.bundleItems.map((b,i)=>routeNavItemRowHtml(b, false, `${routeIdx}:${i}`)).join('')}
@@ -2483,6 +2553,156 @@ function renderRouteNavPanel(){
       addToCraftList(entry.item.id, entry.tier, entry.ench, 1);
     });
   });
+
+  wrap.querySelectorAll('.navstartbtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const idx = Number(btn.dataset.route);
+      const route = top[idx];
+      const items = [route.primaryItem, ...route.bundleItems];
+      startNav(route.primaryItem.materialCity, route.primaryItem.craftCity, destinationCity, route.waypoints, items);
+    });
+  });
+}
+
+/* =======================================================================
+   🧭 カーナビ風ルートガイド（ナビパネル）
+   ---------------------------------------------------------------------
+   提案されたルートを「開始」すると、地図画像（images/map/albion-royal-map.jpg）の上に
+   現在地・次の目的地をハイライト表示し、「次へ進む」ボタンを押した瞬間に画面がリアルタイムに
+   （＝押した直後に、リロード不要で）切り替わる、簡易カーナビ風のガイドを表示する。
+   ※ GPS等の位置情報は取得できないため、実際の移動をトリガーにした自動進行ではなく、
+     ユーザーが到着するたびに手動で「次へ進む」を押して進める形式のガイドです。
+======================================================================= */
+let activeNav = null; // {materialCity, craftCity, destinationCity, waypoints, items:[{item,tier,ench,profit,sellPrice}], stepIndex}
+
+// waypoints上の各都市で「何をすべきか」のアクション一覧を組み立てる
+function buildNavSteps(materialCity, craftCity, destinationCity, waypoints){
+  return waypoints.map((city, idx)=>{
+    const actions = [];
+    const isLast = idx===waypoints.length-1;
+    if(city===materialCity) actions.push('🛒 素材を購入する');
+    if(city===craftCity) actions.push('🔨 クラフトを実行する');
+    if(isLast) actions.push('📦 スタッシュに保管する（最終目的地）');
+    if(actions.length===0) actions.push('➡ 通過するだけでOK（買い物・クラフトなし）');
+    return {city, actions, isLast};
+  });
+}
+
+function startNav(materialCity, craftCity, destinationCity, waypoints, items){
+  activeNav = {
+    materialCity, craftCity, destinationCity, waypoints,
+    items: items.map(e=>({item:e.item, tier:e.tier, ench:e.ench, profit:e.profit, sellPrice:e.sellPrice})),
+    stepIndex: 0,
+  };
+  renderNavPanel();
+  const panel = document.getElementById('navPanel');
+  if(panel) panel.scrollIntoView({behavior:'smooth', block:'start'});
+}
+function navAdvance(){
+  if(!activeNav) return;
+  if(activeNav.stepIndex < activeNav.waypoints.length-1){
+    activeNav.stepIndex++;
+    renderNavPanel();
+  }
+}
+function navBack(){
+  if(!activeNav) return;
+  if(activeNav.stepIndex>0){
+    activeNav.stepIndex--;
+    renderNavPanel();
+  }
+}
+function navEnd(){
+  activeNav = null;
+  renderNavPanel();
+}
+
+function renderNavPanel(){
+  const wrap = document.getElementById('navPanel');
+  if(!wrap) return;
+  if(!activeNav){ wrap.innerHTML=''; return; }
+
+  const {materialCity, craftCity, destinationCity, waypoints, items, stepIndex} = activeNav;
+  const steps = buildNavSteps(materialCity, craftCity, destinationCity, waypoints);
+  const cur = steps[stepIndex];
+  const isFinished = stepIndex === steps.length-1;
+
+  // 地図マーカー：ルート上の都市は進捗に応じて 済み(緑)／現在地(金・点滅)／これから(グレー) を切り替える。
+  // ルートに含まれない都市はデフォルトの薄いグレーのまま表示するだけ。
+  const markerHtml = Object.keys(CITY_MAP_COORDS).map(city=>{
+    const coord = CITY_MAP_COORDS[city];
+    const wpIdx = waypoints.indexOf(city);
+    let cls = '';
+    if(wpIdx>=0){
+      if(wpIdx<stepIndex) cls='done';
+      else if(wpIdx===stepIndex) cls='current';
+      else cls='upcoming';
+    }
+    return `<div class="navmarker ${cls}" style="left:${coord.x}%;top:${coord.y}%;">
+      <div class="navdot"></div>
+      <div class="navlabel">${CITY_LABELS_JA[city]||city}</div>
+    </div>`;
+  }).join('');
+
+  // ルート経路のライン（SVGオーバーレイ）。通過済み区間は緑の実線、これから進む区間は金色の破線。
+  const routePoints = waypoints.map(c=>CITY_MAP_COORDS[c]);
+  let lineHtml = '';
+  for(let i=0;i<routePoints.length-1;i++){
+    const a = routePoints[i], b = routePoints[i+1];
+    const passed = i < stepIndex;
+    lineHtml += `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"
+      stroke="${passed?'#4ade80':'#e0ac54'}" stroke-width="0.6"
+      stroke-dasharray="${passed?'0':'1.6,1.3'}" vector-effect="non-scaling-stroke" />`;
+  }
+
+  const itemListHtml = items.map(e=>`
+    <div class="navitemrow">
+      <img src="${e.item.file}" alt="${e.item.name}">
+      <span class="niname">${e.item.name} T${e.tier}.${e.ench}</span>
+      <span class="niprofit">${e.profit>=0?'+':''}${fmt(e.profit)}</span>
+    </div>`).join('');
+
+  wrap.innerHTML = `
+    <div class="navpanel">
+      <div class="navpanel-head">
+        <h3>🧭 カーナビ：${CITY_LABELS_JA[materialCity]||materialCity} ➔ … ➔ ${CITY_LABELS_JA[destinationCity]||destinationCity}</h3>
+        <button type="button" class="navpanel-close" id="navCloseBtn">✕ ルートを終了</button>
+      </div>
+      <div class="navpanel-body">
+        <div class="navmap">
+          <img src="images/map/albion-royal-map.jpg" alt="Albion Online ロイヤル大陸マップ">
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none">${lineHtml}</svg>
+          ${markerHtml}
+        </div>
+        <div class="navinfo">
+          <div class="navstepbadge">STEP ${stepIndex+1} / ${steps.length}</div>
+          <div class="navcurrentcity">📍 現在地: ${CITY_LABELS_JA[cur.city]||cur.city}</div>
+          <div class="navactions">
+            ${cur.actions.map(a=>`<div class="navaction">${a}</div>`).join('')}
+          </div>
+          ${isFinished ? `<div class="note">✅ このルートは完了です。あとはご都合の良いタイミングで${CITY_LABELS_JA[destinationCity]||destinationCity}から🏴${BM_LABEL_JA}（${CITY_LABELS_JA['Caerleon']}）へ持ち込んで売却してください（この最終搬入はルート計算には含まれていません）。</div>` : ''}
+          <div class="navbtnrow">
+            ${stepIndex>0 ? `<button type="button" class="navbtn secondary" id="navBackBtn">← 前の地点</button>` : ''}
+            ${!isFinished
+              ? `<button type="button" class="navbtn" id="navNextBtn">${CITY_LABELS_JA[waypoints[stepIndex+1]]||waypoints[stepIndex+1]}へ向かう →</button>`
+              : `<button type="button" class="navbtn" id="navFinishBtn">🏁 ルートを完了する</button>`}
+          </div>
+          <div>
+            <div class="sub" style="margin:6px 0 2px;">このルートで作る装備</div>
+            <div class="navitemlist">${itemListHtml}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('navCloseBtn').addEventListener('click', navEnd);
+  const nextBtn = document.getElementById('navNextBtn');
+  if(nextBtn) nextBtn.addEventListener('click', navAdvance);
+  const backBtn = document.getElementById('navBackBtn');
+  if(backBtn) backBtn.addEventListener('click', navBack);
+  const finishBtn = document.getElementById('navFinishBtn');
+  if(finishBtn) finishBtn.addEventListener('click', navEnd);
 }
 
 /* =======================================================================
