@@ -2396,6 +2396,68 @@ function buildMarginRankedCandidates(){
   return results;
 }
 
+// buildMarginRankedCandidates() と違い、利益がマイナス/ゼロの装備も含めて
+// 「ブラックマーケットの売値が入力済みのすべての(装備,ティア,補正段階)」を対象にする。
+// 「価格入力済みの装備を自動分析」機能で使用。
+function buildAllPricedCandidates(){
+  const results = [];
+  ITEMS.forEach(item=>{
+    TIERS4to8.forEach(t=>{
+      ENCH.forEach(e=>{
+        const sp = getSellPrice(BM_LOCATION, item.id, t, e);
+        if(sp<=0) return;
+        const c = computeItemCost(item, t, e);
+        const {net} = computeNetSell(sp, {isBlackMarket:true});
+        const profit = net - c.total;
+        const margin = sp>0 ? (profit/sp*100) : 0;
+        results.push({item, tier:t, ench:e, sellPrice:sp, cost:c.total, profit, margin, hasCost:c.total>0});
+      });
+    });
+  });
+  results.sort((a,b)=>b.margin-a.margin);
+  return results;
+}
+
+// ブラックマーケットの売値が入力済みの装備をすべて対象に、おすすめ製造個数・マックスを一括計算する。
+async function analyzeAllPricedItems(){
+  const candidates = buildAllPricedCandidates();
+  const recoList = await Promise.all(candidates.map(c=>getRecommendedCraftQty(c.item, c.tier, c.ench)));
+  return candidates.map((c, i)=>({...c, ...recoList[i]}));
+}
+
+function renderTrendBulkResult(list, wrap){
+  if(list.length===0){
+    wrap.innerHTML = `<div class="empty-hint">ブラックマーケットの売値が入力された装備が見つかりません。「原価入力 &gt; 装備売値・アーティファクト」で入力してください。</div>`;
+    return;
+  }
+  wrap.innerHTML = `
+    <div class="matneedgroup-title" style="margin-bottom:4px;">${list.length} 件を分析しました（利益率が高い順）。</div>
+    ${list.map(r=>`
+      <div class="matneedrow">
+        <span class="mnlabel">
+          <img class="artthumb" src="${r.item.file}" alt="">
+          ${r.item.name} T${r.tier}.${r.ench}
+          ${r.hasAodp ? '<span class="citybadge citybadge-hit">AODP連携済</span>' : '<span class="citybadge">簡易目安</span>'}
+          ${r.isBonusToday ? '<span class="citybadge citybadge-hit">本日ボーナス対象</span>' : ''}
+        </span>
+        <span class="mnqty">おすすめ ${fmt(r.recommendedQty)} 個 ／ マックス ${fmt(r.maxQty)} 個</span>
+        <span class="mncost">利益率 ${r.margin.toFixed(1)}%（${r.profit>=0?'+':''}${fmt(r.profit)}/個）</span>
+        <button type="button" class="tinybtn trendbulk-addbtn" data-key="${craftKey(r.item.id, r.tier, r.ench)}" data-qty="${r.recommendedQty}">+ 追加</button>
+      </div>
+    `).join('')}
+  `;
+
+  wrap.querySelectorAll('.trendbulk-addbtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const r = list.find(x=>craftKey(x.item.id,x.tier,x.ench)===btn.dataset.key);
+      if(!r) return;
+      addToCraftList(r.item.id, r.tier, r.ench, Number(btn.dataset.qty));
+      btn.textContent = '✓ 追加済み';
+      btn.disabled = true;
+    });
+  });
+}
+
 /**
  * 資金を利益率が高い順に装備へ割り当て、装備ごとの「おすすめ製造個数×1.2（マックス）」を
  * 超えないように作成リストへ追加していく。
@@ -3169,6 +3231,21 @@ function renderTrendPage(){
     tierSel.addEventListener('change', renderTrendPage);
     enchSel.addEventListener('change', renderTrendPage);
     document.getElementById('trendDays').addEventListener('change', ()=>{ if(trendSelectedItem) computeAndRenderTrend(); });
+
+    const bulkBtn = document.getElementById('trendBulkAnalyzeBtn');
+    bulkBtn.addEventListener('click', async ()=>{
+      const resultEl = document.getElementById('trendBulkResult');
+      bulkBtn.disabled = true;
+      resultEl.innerHTML = `<div class="empty-hint">価格入力済みの装備を分析中…（AODPの出来高データを取得しています。件数が多いと少し時間がかかります）</div>`;
+      try{
+        const list = await analyzeAllPricedItems();
+        renderTrendBulkResult(list, resultEl);
+      }catch(err){
+        resultEl.innerHTML = `<div class="empty-hint">分析に失敗しました: ${err.message}</div>`;
+      }finally{
+        bulkBtn.disabled = false;
+      }
+    });
   }
 
   renderCategorySidebar('trend', document.getElementById('trendCategoryList'), renderTrendPage);
