@@ -668,11 +668,13 @@ body{
             <input type="number" id="buildBudgetInput" min="0" placeholder="例: 500000">
           </div>
           <button type="button" class="tinybtn" id="buildBudgetAllocateBtn">💰 資金内で製造量を自動決定（利益率順）</button>
+          <button type="button" class="tinybtn" id="clearCraftListBtn" style="margin-left:auto;">🗑 作成リストだけ削除</button>
         </div>
         <div class="note">
           ブラックマーケットの売値が入力済みの装備を<b>利益率が高い順</b>に選び、装備ごとの「販売数分析タブのおすすめ製造個数 × 1.2」を<b>マックス</b>として、
           資金が尽きるまで作成リストに追加します。この自動追加はマックスを超えません（すでにマックス以上を手動追加している装備はスキップします）。
-          通常どおり自分でリストへ「追加」する分はこれまで通りマックスを超えてもかまいません。
+          通常どおり自分でリストへ「追加」する分はこれまで通りマックスを超えてもかまいません。<br>
+          「🗑 作成リストだけ削除」は、価格・ボーナス設定などはそのままに、<b>作成リストの中身だけ</b>を空にします（右上の「リセット」はすべての入力データを消すのでご注意ください）。
         </div>
         <div id="buildBudgetResult" style="margin-top:8px;"></div>
       </div>
