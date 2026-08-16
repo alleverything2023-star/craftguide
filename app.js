@@ -116,10 +116,9 @@ const CITY_COLORS = {
   Bridgewatch:  '#f0a930', // 橙（砂漠）
 };
 
-// 価格入力（精製素材・装備売値・アーティファクト）で選べる都市。
-// 全都市（ロイヤル5都市＋カエルレオン）を対象とする。ブラックマーケット売値は別枠で
-// 都市選択に関わらず常時1つだけ表示する（PRICE_ENTRY_CITIESには含めない）。
-const PRICE_ENTRY_CITIES = CITIES;
+// 価格入力（精製素材・装備売値・アーティファクトで共有）で選べる都市。
+// これは下のBM_LOCATION定義後に組み立てる（このファイル末尾付近で初期化）。
+let PRICE_ENTRY_CITIES = CITIES; // ← BM_LOCATION定義後に [...CITIES, BM_LOCATION] へ再設定される
 
 /* ---------------------------------------------------------------------
    ブラックマーケット（カエルレオン内のNPC買取所）
@@ -137,6 +136,13 @@ const PRICE_ENTRY_CITIES = CITIES;
 const BM_LOCATION = 'BlackMarket';       // このツール内部でのキー（storage key・都市セレクタの値）
 const AODP_BM_LOCATION = 'BlackMarket';  // AODPへの問い合わせに使うロケーション名（要検証）
 const BM_LABEL_JA = 'ブラックマーケット';
+
+// 価格入力の都市セレクタ（都市の並びの末尾にブラックマーケットを1つのタブとして並べる）。
+// 装備売値の入力欄を「都市ごとの売値」と「BM売値」で別々の場所に分けず、同じ並びの中で
+// タブを切り替えるだけで済むようにするため。
+PRICE_ENTRY_CITIES = [...CITIES, BM_LOCATION];
+CITY_LABELS_JA[BM_LOCATION] = BM_LABEL_JA;
+
 
 // 精錬ボーナス都市（素材id: MATERIALSのidに対応）
 const REFINE_BONUS_CITY = {
@@ -1334,11 +1340,10 @@ let priceEntryCity = 'Lymhurst';
 function renderPriceCitySelector(){
   const wrap = document.getElementById('priceCityRow');
   if(!wrap) return;
-  // 通常都市（ロイヤル5都市＋カエルレオン）は都市ボタンで切り替え、
-  // ブラックマーケットは別枠として常に1つだけ固定表示する。
+  // 都市の並びの末尾にブラックマーケットも1つのタブとして表示する（PRICE_ENTRY_CITIES = [...CITIES, BM_LOCATION]）。
   wrap.innerHTML = PRICE_ENTRY_CITIES.map(c=>
-    `<button type="button" class="citybtn${c===priceEntryCity?' active':''}" data-city="${c}">${CITY_LABELS_JA[c]}</button>`
-  ).join('') + `<span class="citybadge citybadge-hit" style="margin-left:8px;">➔ ${BM_LABEL_JA}（売却・常時1つの入力欄）</span>`;
+    `<button type="button" class="citybtn${c===priceEntryCity?' active':''}${c===BM_LOCATION?' citybtn-bm':''}" data-city="${c}">${CITY_LABELS_JA[c]}</button>`
+  ).join('');
   wrap.querySelectorAll('.citybtn').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       priceEntryCity = btn.dataset.city;
@@ -1353,6 +1358,14 @@ function renderPriceCitySelector(){
    PAGE 1-A: 精製素材 price grid
 ======================================================================= */
 function buildRefinedGrid(){
+  const isBM = priceEntryCity === BM_LOCATION;
+  ['refinedGrid','rawGrid'].forEach(id=>{
+    const wrap = document.getElementById(id);
+    if(wrap && isBM){
+      wrap.innerHTML = `<div class="note">${BM_LABEL_JA}では素材を購入できないため、この画面には入力欄がありません。通常都市タブに切り替えて入力してください。</div>`;
+    }
+  });
+  if(isBM) return;
   buildMaterialGrid('refinedGrid', MATERIALS);
   buildMaterialGrid('rawGrid', RAW_MATERIALS);
 }
@@ -1450,6 +1463,7 @@ function renderEquipGrid(panelWrap, g){
   panelWrap.appendChild(panel);
 
   const grid = panel.querySelector('#equipPriceGrid');
+  const isBM = priceEntryCity === BM_LOCATION;
   g.items.forEach(item=>{
     const col = document.createElement('div');
     col.className = 'pricecol equipcol';
@@ -1465,30 +1479,33 @@ function renderEquipGrid(panelWrap, g){
       html += `<div class="citybonusrow"><span class="citybonusdot" style="background:${bonusColor};"></span>ボーナス都市: ${CITY_LABELS_JA[bonusCity]}</div>`;
     }
     html += renderAodpBlockHtml(item);
-    html += `<div class="prow subtle" style="padding-top:6px;"><label style="font-weight:700;color:var(--text-faint);">売値</label></div>`;
-    TIERS4to8.forEach(t=>{
-      ENCH.forEach(e=>{
-        html += `<div class="prow"><label>T${t}.${e}</label>
-          <input type="number" min="0" placeholder="0" data-item="${item.id}" data-tier="${t}" data-ench="${e}"></div>`;
-      });
-    });
-    if(item.category!=='cape'){
-      // ブラックマーケットはNPCの買い注文（都市を問わずカエルレオン1箇所のみ）なので、
-      // 選択中の都市（priceEntryCity）に関わらず常に1つの入力欄として表示する。
-      html += `<div class="prow subtle" style="padding-top:6px;"><label style="font-weight:700;color:var(--gold-soft);">${BM_LABEL_JA}売値（NPC買取価格）</label></div>`;
+
+    // 売値：都市タブの並びの中に「ブラックマーケット」も1つのタブとして含めているため、
+    // 入力欄自体は常にこの1か所だけで、選択中のタブ（priceEntryCity）に応じて
+    // 通常都市の売値／BM売値（NPC買取価格）のどちらに保存するかが切り替わる。
+    if(isBM && item.category==='cape'){
+      html += `<div class="note" style="margin-top:6px;">${BM_LABEL_JA}ではケープは買い取ってもらえないため、入力欄はありません（通常都市タブで売値を入力してください）。</div>`;
+    }else{
+      const sellLabel = isBM ? `${BM_LABEL_JA}売値（NPC買取価格）` : '売値';
+      html += `<div class="prow subtle" style="padding-top:6px;"><label style="font-weight:700;color:${isBM?'var(--gold-soft)':'var(--text-faint)'};">${sellLabel}</label></div>`;
       TIERS4to8.forEach(t=>{
         ENCH.forEach(e=>{
           html += `<div class="prow"><label>T${t}.${e}</label>
-            <input type="number" min="0" placeholder="0" data-bm-item="${item.id}" data-bm-tier="${t}" data-bm-ench="${e}"></div>`;
+            <input type="number" min="0" placeholder="0" data-item="${item.id}" data-tier="${t}" data-ench="${e}"></div>`;
         });
       });
     }
+
     if(isArtifactItem(item)){
-      html += `<div class="prow subtle artifact-subhead"><label>アーティファクト欠片単価</label></div>`;
-      TIERS4to8.forEach(t=>{
-        html += `<div class="prow"><label>T${t}</label>
-          <input type="number" min="0" placeholder="0" class="artifact-input" data-artifact-item="${item.id}" data-artifact-tier="${t}"></div>`;
-      });
+      if(isBM){
+        html += `<div class="note" style="margin-top:6px;">アーティファクト欠片は${BM_LABEL_JA}では購入できないため、入力欄はありません（通常都市タブで単価を入力してください）。</div>`;
+      }else{
+        html += `<div class="prow subtle artifact-subhead"><label>アーティファクト欠片単価</label></div>`;
+        TIERS4to8.forEach(t=>{
+          html += `<div class="prow"><label>T${t}</label>
+            <input type="number" min="0" placeholder="0" class="artifact-input" data-artifact-item="${item.id}" data-artifact-tier="${t}"></div>`;
+        });
+      }
     }
     col.innerHTML = html;
     grid.appendChild(col);
@@ -1498,14 +1515,6 @@ function renderEquipGrid(panelWrap, g){
     inp.value = getSellPrice(priceEntryCity, inp.dataset.item, inp.dataset.tier, inp.dataset.ench) || '';
     inp.addEventListener('input', ()=>{
       setSellPrice(priceEntryCity, inp.dataset.item, Number(inp.dataset.tier), Number(inp.dataset.ench), Number(inp.value)||0);
-      updateTopProfit();
-    });
-  });
-
-  grid.querySelectorAll('input[data-bm-item]').forEach(inp=>{
-    inp.value = getSellPrice(BM_LOCATION, inp.dataset.bmItem, inp.dataset.bmTier, inp.dataset.bmEnch) || '';
-    inp.addEventListener('input', ()=>{
-      setSellPrice(BM_LOCATION, inp.dataset.bmItem, Number(inp.dataset.bmTier), Number(inp.dataset.bmEnch), Number(inp.value)||0);
       updateTopProfit();
     });
   });
