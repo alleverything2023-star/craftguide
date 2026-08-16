@@ -2067,10 +2067,11 @@ function renderBuildPage(){
       budgetBtn.disabled = true;
       resultEl.innerHTML = `<div class="empty-hint">おすすめ製造個数（販売数分析）を計算中…（AODPの出来高データを取得しています。少し時間がかかります）</div>`;
       try{
-        const {allocated, spent, remaining} = await autoAllocateBudget(budget);
+        const result = await autoAllocateBudget(budget);
+        const {allocated, spent, remaining} = result;
         budgetBtn.disabled = false;
         if(allocated.length===0){
-          resultEl.innerHTML = `<div class="empty-hint">この資金で新たに追加できる装備が見つかりませんでした（ブラックマーケットの売値・素材価格を確認するか、すでにマックスまで追加済みの可能性があります）。</div>`;
+          resultEl.innerHTML = `<div class="empty-hint">${budgetAllocateEmptyReason(result)}</div>`;
           return;
         }
         resultEl.innerHTML = `
@@ -2086,6 +2087,22 @@ function renderBuildPage(){
       }catch(err){
         budgetBtn.disabled = false;
         resultEl.innerHTML = `<div class="empty-hint">計算に失敗しました: ${err.message}</div>`;
+      }
+    });
+  }
+
+  const clearListBtn = document.getElementById('clearCraftListBtn');
+  if(clearListBtn && !clearListBtn.dataset.bound){
+    clearListBtn.dataset.bound = '1';
+    clearListBtn.addEventListener('click', ()=>{
+      if(Object.keys(STATE.craftList).length===0) return;
+      if(confirm('作成リストの中身だけを削除します（価格・ボーナス設定・在庫などはそのまま残ります）。よろしいですか？')){
+        STATE.craftList = {};
+        saveState();
+        renderCraftListPanel();
+        updateTopProfit();
+        const resultEl = document.getElementById('buildBudgetResult');
+        if(resultEl) resultEl.innerHTML = '';
       }
     });
   }
@@ -2384,30 +2401,57 @@ function buildMarginRankedCandidates(){
  * 超えないように作成リストへ追加していく。
  * ・すでに手動でマックス以上を追加している装備はスキップ（触らない＝マックス超過を尊重）。
  * ・マックス未満の装備は、資金が続く限りマックスまで積み増す。
+ * ・以前は「利益率上位60件だけ」に絞っていたため、その60件が一度マックスまで埋まると
+ *   2回目以降のクリックで必ず「見つかりませんでした」になっていた不具合を修正
+ *   （利益率が正の候補は全件を対象にする。AODP問い合わせ結果は20分キャッシュされるため、
+ *   再クリック時は多くがキャッシュから即座に返る）。
  */
+// 「新たに追加できる装備が見つかりませんでした」の原因を具体的に説明するためのメッセージ生成
+function budgetAllocateEmptyReason(result){
+  const {totalCandidates, cappedCount, cheapestAffordable} = result;
+  if(totalCandidates===0){
+    return 'ブラックマーケットの売値が入力済みで、かつ利益がプラスになる装備が見つかりません。「原価入力 &gt; 装備売値・アーティファクト」でブラックマーケットの売値を、「原価入力 &gt; 精製素材」で素材価格を入力してください。';
+  }
+  if(cappedCount>=totalCandidates){
+    return `候補 ${totalCandidates} 件はすべて、すでに「おすすめ製造個数×1.2（マックス）」まで作成リストに入っています。これ以上はこの機能では追加されません（数量を減らすか、通常の「追加」でマックスを超えて手動追加してください）。`;
+  }
+  if(cheapestAffordable!=null){
+    return `資金が足りません。追加できる中でもっとも安い装備でも1個あたり ${fmt(cheapestAffordable)} silver かかります。`;
+  }
+  return 'この資金・条件で追加できる装備が見つかりませんでした。';
+}
+
 async function autoAllocateBudget(budget, opts={}){
-  const limit = opts.candidateLimit || 60; // AODP問い合わせ数を抑えるための対象上限（利益率上位のみ）
-  const candidates = buildMarginRankedCandidates().slice(0, limit);
+  const candidates = buildMarginRankedCandidates();
   const recoList = await Promise.all(candidates.map(c=>getRecommendedCraftQty(c.item, c.tier, c.ench)));
 
   let remaining = Math.max(0, Number(budget)||0);
   const allocated = [];
+  let cappedCount = 0, invalidCostCount = 0, tooExpensiveCount = 0;
+  let cheapestAffordable = Infinity;
+
   candidates.forEach((c, i)=>{
-    if(remaining<=0 || c.cost<=0) return;
+    if(c.cost<=0){ invalidCostCount++; return; } // 原価入力が不足している（デフォルトの購入/クラフト都市に価格未入力）
     const reco = recoList[i];
     const key = craftKey(c.item.id, c.tier, c.ench);
     const existingQty = STATE.craftList[key] ? STATE.craftList[key].qty : 0;
-    const room = reco.maxQty - existingQty; // 既にマックス以上なら0以下 → スキップ
-    if(room<=0) return;
+    const room = reco.maxQty - existingQty; // 既にマックス以上なら0以下 → スキップ（手動追加分を尊重）
+    if(room<=0){ cappedCount++; return; }
+    if(remaining<=0) return;
     const qtyByBudget = Math.floor(remaining / c.cost);
+    if(qtyByBudget<=0){ tooExpensiveCount++; cheapestAffordable = Math.min(cheapestAffordable, c.cost); return; }
     const qtyToAdd = Math.min(room, qtyByBudget);
-    if(qtyToAdd<=0) return;
     remaining -= qtyToAdd * c.cost;
     addToCraftList(c.item.id, c.tier, c.ench, qtyToAdd);
     allocated.push({...c, qtyAdded:qtyToAdd, qtyTotal:existingQty+qtyToAdd,
                      maxQty:reco.maxQty, recommendedQty:reco.recommendedQty, hasAodp:reco.hasAodp});
   });
-  return {allocated, spent:(Number(budget)||0)-remaining, remaining};
+
+  return {
+    allocated, spent:(Number(budget)||0)-remaining, remaining,
+    totalCandidates: candidates.length, cappedCount, invalidCostCount, tooExpensiveCount,
+    cheapestAffordable: isFinite(cheapestAffordable) ? cheapestAffordable : null,
+  };
 }
 
 /**
@@ -2465,28 +2509,9 @@ function buildRouteSuggestionForEntries(entries, opts={}){
     const list = routesMap[routeKey];
     const totalProfit = list.reduce((s,r)=>s+r.profitTotal,0);
     const totalCost = list.reduce((s,r)=>s+r.cost*r.qty,0);
-
-    // 何をどこで何個買うか（購入都市＝list[0].materialCity。ルートキーが同じ＝同じ購入都市/クラフト都市のはず）
-    const materialsNeeded = {};
-    list.forEach(r=>{
-      const c = computeItemCost(r.item, r.tier, r.ench, r.craftCity, r.materialCity);
-      c.breakdown.forEach(b=>{
-        const k = `${b.id}_T${r.tier}_${r.ench}`;
-        if(!materialsNeeded[k]) materialsNeeded[k] = {label:b.label, tier:r.tier, ench:r.ench, qty:0, cost:0};
-        materialsNeeded[k].qty += b.rawQty*r.qty;
-        materialsNeeded[k].cost += b.grossCost*r.qty;
-      });
-      if(c.artifactQty>0){
-        const ak = `artifact_${r.item.id}_T${r.tier}`;
-        if(!materialsNeeded[ak]) materialsNeeded[ak] = {label:`${r.item.name} 用アーティファクト`, tier:r.tier, ench:r.ench, qty:0, cost:0};
-        materialsNeeded[ak].qty += c.artifactQty*r.qty;
-        materialsNeeded[ak].cost += c.artifactCost*r.qty;
-      }
-    });
-
     return {
       routeKey, waypoints:list[0].waypoints, buyCity:list[0].materialCity, craftCity:list[0].craftCity,
-      destinationCity, items:list, totalProfit, totalCost, materialsNeeded: Object.values(materialsNeeded),
+      destinationCity, items:list, totalProfit, totalCost,
     };
   });
 
@@ -2494,22 +2519,25 @@ function buildRouteSuggestionForEntries(entries, opts={}){
   return routeList;
 }
 
-function budgetRouteCardHtml(route){
+// 資金からの自動ルート提案カード。買う物/作る数の内訳はここでは出さず、
+// 「🧭 開始」を押した先のカーナビ側に集約して表示する（作成リスト＝作る個数の管理、カーナビ＝買う物/作る物の内訳）。
+let lastBudgetRouteList = [];
+
+function budgetRouteCardHtml(route, idx){
   const pathHtml = route.waypoints.map((c,i)=>{
     const isLast = i===route.waypoints.length-1;
     return `<span class="rp-city${isLast?' rp-bonus':''}">${CITY_LABELS_JA[c]||c}</span>`
          + (i<route.waypoints.length-1 ? '<span class="rp-arrow">➔</span>' : '');
   }).join('');
 
-  const buyRows = route.materialsNeeded.map(m=>`
-    <div class="matneedrow"><span class="mnlabel">${m.label} T${m.tier}.${m.ench}</span><span class="mnqty">${fmt(m.qty)} 個</span><span class="mncost">${fmt(m.cost)}</span></div>
-  `).join('');
-
-  const craftRows = route.items.map(r=>`
-    <div class="matneedrow">
-      <span class="mnlabel"><img class="artthumb" src="${r.item.file}" alt=""> ${r.item.name} T${r.tier}.${r.ench}</span>
-      <span class="mnqty">${fmt(r.qty)} 個 作る</span>
-      <span class="mncost">利益 ${r.profitTotal>=0?'+':''}${fmt(r.profitTotal)}（${r.margin.toFixed(1)}%）</span>
+  const itemsHtml = route.items.map(r=>`
+    <div class="recorow">
+      <span class="rerank">🛒</span>
+      <img src="${r.item.file}" alt="${r.item.name}">
+      <div class="irname">${r.item.name} <span class="retier">T${r.tier}.${r.ench}</span></div>
+      <div class="bstat"><span class="bk">作成リストの個数</span><span class="bv strong">${fmt(r.qty)}</span></div>
+      <div class="bstat"><span class="bk">利益（合計）</span><span class="bv strong ${r.profitTotal>=0?'profit-pos':'profit-neg'}">${r.profitTotal>=0?'+':''}${fmt(r.profitTotal)}</span></div>
+      <div class="bstat"><span class="bk">利益率</span><span class="bv">${r.margin.toFixed(1)}%</span></div>
     </div>`).join('');
 
   return `
@@ -2517,29 +2545,32 @@ function budgetRouteCardHtml(route){
       <div class="routepath" style="font-size:13.5px;">
         ${pathHtml}
         <span class="citybadge citybadge-hit" style="margin-left:8px;">このルートの合計利益 ${fmt(route.totalProfit)}</span>
-        <span class="citybadge">仕入れ合計 ${fmt(route.totalCost)}</span>
+        <span class="citybadge">仕入れ合計(目安) ${fmt(route.totalCost)}</span>
+        <button type="button" class="navstartbtn" data-budgetroute="${idx}">🧭 このルートを開始</button>
       </div>
-      <div class="matneedgroup">
-        <div class="matneedgroup-title">🛒 購入: ${CITY_LABELS_JA[route.buyCity]||route.buyCity} で何を何個買うか</div>
-        ${buyRows || '<div class="empty-hint">購入する素材はありません</div>'}
-      </div>
-      <div class="matneedgroup">
-        <div class="matneedgroup-title">🔨 クラフト: ${CITY_LABELS_JA[route.craftCity]||route.craftCity} で何を何個作るか　→　🏁 最終目的地: ${CITY_LABELS_JA[route.destinationCity]||route.destinationCity}</div>
-        ${craftRows}
-      </div>
+      ${itemsHtml}
     </div>
   `;
 }
 
 function renderBudgetRouteSuggestion(routeList, wrap, {budget, spent, remaining}){
+  lastBudgetRouteList = routeList;
   if(routeList.length===0){
     wrap.innerHTML = `<div class="empty-hint">この予算・条件で製造できる装備が見つかりませんでした（ブラックマーケットの売値・素材価格が入力されているか確認してください）。</div>`;
     return;
   }
   wrap.innerHTML = `
-    <div class="matneedgroup-title" style="margin-bottom:4px;">資金 ${fmt(budget)} のうち ${fmt(spent)} を使用（残り ${fmt(remaining)}）。作成リスト全体をもとに、ルートごとに購入・クラフトの内訳をまとめました（合計利益が高い順）。</div>
-    ${routeList.map(r=>budgetRouteCardHtml(r)).join('')}
+    <div class="matneedgroup-title" style="margin-bottom:4px;">資金 ${fmt(budget)} のうち ${fmt(spent)} を使用（残り ${fmt(remaining)}）。作成リスト全体（このボタンで追加した分＋手動追加分）をもとに、同じ移動でまとめて仕入れ・製作できるルート単位でまとめました（合計利益が高い順）。「🧭 開始」を押すと、そのルートの<b>どこで何を何個買うか・どこで何個作るか</b>をカーナビ画面で確認できます。</div>
+    ${routeList.map((r,idx)=>budgetRouteCardHtml(r,idx)).join('')}
   `;
+
+  wrap.querySelectorAll('[data-budgetroute]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const route = lastBudgetRouteList[Number(btn.dataset.budgetroute)];
+      const items = route.items.map(r=>({item:r.item, tier:r.tier, ench:r.ench, profit:r.profitPerUnit, sellPrice:r.sellPrice, qty:r.qty}));
+      startNav(route.buyCity, route.craftCity, route.destinationCity, route.waypoints, items);
+    });
+  });
 }
 
 /* =======================================================================
@@ -2670,7 +2701,8 @@ function renderRoutePage(){
       try{
         const includeCaerleon = document.getElementById('routeNavIncludeCaerleon').checked;
         const destinationCity = STATE.settings.destinationCity || 'Lymhurst';
-        const {spent, remaining} = await autoAllocateBudget(budget);
+        const result = await autoAllocateBudget(budget);
+        const {allocated, spent, remaining} = result;
 
         // ルート提案は「この機能で追加した分」だけでなく、作成リスト全体（手動追加分も含む）を対象にする
         const entries = Object.values(STATE.craftList)
@@ -2679,7 +2711,14 @@ function renderRoutePage(){
         const routeList = buildRouteSuggestionForEntries(entries, {includeCaerleon, destinationCity});
 
         routeBudgetBtn.disabled = false;
+        if(entries.length===0){
+          resultEl.innerHTML = `<div class="empty-hint">${budgetAllocateEmptyReason(result)}</div>`;
+          return;
+        }
         renderBudgetRouteSuggestion(routeList, resultEl, {budget, spent, remaining});
+        if(allocated.length===0){
+          resultEl.insertAdjacentHTML('afterbegin', `<div class="note" style="margin-bottom:8px;">ℹ この資金では新規追加はありませんでした（${budgetAllocateEmptyReason(result)}）。既存の作成リストの内容でルートを組みました。</div>`);
+        }
       }catch(err){
         routeBudgetBtn.disabled = false;
         resultEl.innerHTML = `<div class="empty-hint">計算に失敗しました: ${err.message}</div>`;
@@ -2791,7 +2830,7 @@ async function computeAndRenderRoutes(){
       const idx = Number(btn.dataset.ridx);
       const r = results[idx];
       startNav(r.buyCity, r.craftCity, r.destinationCity, r.waypoints, [
-        {item, tier, ench, profit:r.profit, sellPrice:r.sellPrice}
+        {item, tier, ench, profit:r.profit/qty, sellPrice:r.sellPrice, qty}
       ]);
     });
   });
@@ -2893,7 +2932,8 @@ function renderRouteNavPanel(){
     btn.addEventListener('click', ()=>{
       const idx = Number(btn.dataset.route);
       const route = top[idx];
-      const items = [route.primaryItem, ...route.bundleItems];
+      const items = [route.primaryItem, ...route.bundleItems]
+        .map(e=>({...e, qty: craftListQtyFor(e.item, e.tier, e.ench)}));
       startNav(route.primaryItem.materialCity, route.primaryItem.craftCity, destinationCity, route.waypoints, items);
     });
   });
@@ -2908,25 +2948,66 @@ function renderRouteNavPanel(){
    ※ GPS等の位置情報は取得できないため、実際の移動をトリガーにした自動進行ではなく、
      ユーザーが到着するたびに手動で「次へ進む」を押して進める形式のガイドです。
 ======================================================================= */
-let activeNav = null; // {materialCity, craftCity, destinationCity, waypoints, items:[{item,tier,ench,profit,sellPrice}], stepIndex}
+let activeNav = null; // {materialCity, craftCity, destinationCity, waypoints, items:[{item,tier,ench,profit,sellPrice,qty}], stepIndex}
 
-// waypoints上の各都市で「何をすべきか」のアクション一覧を組み立てる
-function buildNavSteps(materialCity, craftCity, destinationCity, waypoints){
+// 作成リストに登録済みの個数を取得（無ければ1個として扱う）。カーナビの「何個作る/買う」表示に使う。
+function craftListQtyFor(item, tier, ench){
+  const key = craftKey(item.id, tier, ench);
+  const entry = STATE.craftList[key];
+  return entry ? entry.qty : 1;
+}
+
+// 購入都市で「何を何個買うか」を、ルートに含まれる装備・個数から集計する
+function buildNavShoppingList(materialCity, craftCity, items){
+  const totals = {};
+  items.forEach(e=>{
+    const qty = e.qty || 1;
+    const c = computeItemCost(e.item, e.tier, e.ench, craftCity, materialCity);
+    c.breakdown.forEach(b=>{
+      const k = b.id;
+      if(!totals[k]) totals[k] = {label:b.label, qty:0, cost:0};
+      totals[k].qty += b.rawQty*qty;
+      totals[k].cost += b.grossCost*qty;
+    });
+    if(c.artifactQty>0){
+      const ak = `artifact_${e.item.id}_T${e.tier}`;
+      if(!totals[ak]) totals[ak] = {label:`${e.item.name} 用アーティファクト`, qty:0, cost:0};
+      totals[ak].qty += c.artifactQty*qty;
+      totals[ak].cost += c.artifactCost*qty;
+    }
+  });
+  return Object.values(totals);
+}
+
+// waypoints上の各都市で「何をすべきか」のアクション一覧＋買う物/作る物の内訳を組み立てる
+function buildNavSteps(materialCity, craftCity, destinationCity, waypoints, items){
+  const shoppingList = buildNavShoppingList(materialCity, craftCity, items);
+  const shoppingCost = shoppingList.reduce((s,m)=>s+m.cost, 0);
+  const craftList = items.map(e=>({item:e.item, tier:e.tier, ench:e.ench, qty:e.qty||1}));
+
   return waypoints.map((city, idx)=>{
     const actions = [];
     const isLast = idx===waypoints.length-1;
-    if(city===materialCity) actions.push('🛒 素材を購入する');
-    if(city===craftCity) actions.push('🔨 クラフトを実行する');
+    const isBuyStep = city===materialCity;
+    const isCraftStep = city===craftCity;
+    if(isBuyStep) actions.push('🛒 素材を購入する');
+    if(isCraftStep) actions.push('🔨 クラフトを実行する');
     if(isLast) actions.push('📦 スタッシュに保管する（最終目的地）');
     if(actions.length===0) actions.push('➡ 通過するだけでOK（買い物・クラフトなし）');
-    return {city, actions, isLast};
+    return {
+      city, actions, isLast,
+      shoppingList: isBuyStep ? shoppingList : null,
+      shoppingCost: isBuyStep ? shoppingCost : 0,
+      craftList: isCraftStep ? craftList : null,
+    };
   });
 }
 
 function startNav(materialCity, craftCity, destinationCity, waypoints, items){
   activeNav = {
     materialCity, craftCity, destinationCity, waypoints,
-    items: items.map(e=>({item:e.item, tier:e.tier, ench:e.ench, profit:e.profit, sellPrice:e.sellPrice})),
+    // profitは単価（1個あたり）に統一し、qtyを別途持たせる（買う物/作る物の個数計算に使うため）
+    items: items.map(e=>({item:e.item, tier:e.tier, ench:e.ench, profit:e.profit, sellPrice:e.sellPrice, qty:e.qty||1})),
     stepIndex: 0,
   };
   renderNavPanel();
@@ -2958,7 +3039,7 @@ function renderNavPanel(){
   if(!activeNav){ wrap.innerHTML=''; return; }
 
   const {materialCity, craftCity, destinationCity, waypoints, items, stepIndex} = activeNav;
-  const steps = buildNavSteps(materialCity, craftCity, destinationCity, waypoints);
+  const steps = buildNavSteps(materialCity, craftCity, destinationCity, waypoints, items);
   const cur = steps[stepIndex];
   const isFinished = stepIndex === steps.length-1;
 
@@ -2993,9 +3074,25 @@ function renderNavPanel(){
   const itemListHtml = items.map(e=>`
     <div class="navitemrow">
       <img src="${e.item.file}" alt="${e.item.name}">
-      <span class="niname">${e.item.name} T${e.tier}.${e.ench}</span>
-      <span class="niprofit">${e.profit>=0?'+':''}${fmt(e.profit)}</span>
+      <span class="niname">${e.item.name} T${e.tier}.${e.ench} × ${fmt(e.qty||1)}</span>
+      <span class="niprofit">${(e.profit*(e.qty||1))>=0?'+':''}${fmt(e.profit*(e.qty||1))}</span>
     </div>`).join('');
+
+  const shoppingHtml = cur.shoppingList ? `
+    <div class="matneedgroup">
+      <div class="matneedgroup-title">🛒 ここで何を何個買うか（合計 ${fmt(cur.shoppingCost)}）</div>
+      ${cur.shoppingList.map(m=>`
+        <div class="matneedrow"><span class="mnlabel">${m.label}</span><span class="mnqty">${fmt(m.qty)} 個</span><span class="mncost">${fmt(m.cost)}</span></div>
+      `).join('') || '<div class="empty-hint">購入する素材はありません</div>'}
+    </div>` : '';
+
+  const craftListHtml = cur.craftList ? `
+    <div class="matneedgroup">
+      <div class="matneedgroup-title">🔨 ここで何個作るか</div>
+      ${cur.craftList.map(c=>`
+        <div class="matneedrow"><span class="mnlabel"><img class="artthumb" src="${c.item.file}" alt=""> ${c.item.name} T${c.tier}.${c.ench}</span><span class="mnqty">${fmt(c.qty)} 個</span></div>
+      `).join('')}
+    </div>` : '';
 
   wrap.innerHTML = `
     <div class="navpanel">
@@ -3015,6 +3112,8 @@ function renderNavPanel(){
           <div class="navactions">
             ${cur.actions.map(a=>`<div class="navaction">${a}</div>`).join('')}
           </div>
+          ${shoppingHtml}
+          ${craftListHtml}
           ${isFinished ? `<div class="note">✅ このルートは完了です。あとはご都合の良いタイミングで${CITY_LABELS_JA[destinationCity]||destinationCity}から🏴${BM_LABEL_JA}（${CITY_LABELS_JA['Caerleon']}）へ持ち込んで売却してください（この最終搬入はルート計算には含まれていません）。</div>` : ''}
           <div class="navbtnrow">
             ${stepIndex>0 ? `<button type="button" class="navbtn secondary" id="navBackBtn">← 前の地点</button>` : ''}
@@ -3023,7 +3122,7 @@ function renderNavPanel(){
               : `<button type="button" class="navbtn" id="navFinishBtn">🏁 ルートを完了する</button>`}
           </div>
           <div>
-            <div class="sub" style="margin:6px 0 2px;">このルートで作る装備</div>
+            <div class="sub" style="margin:6px 0 2px;">このルートで作る装備（作成リストの個数）</div>
             <div class="navitemlist">${itemListHtml}</div>
           </div>
         </div>
@@ -3182,6 +3281,28 @@ async function computeAndRenderTrend(){
   const reliabilityNote = bonusPoints.length < 3
     ? `<div class="note" style="margin-top:10px;">⚠ この装備の種類（${SUBTYPE_LABELS[item.subtype]||item.subtype}）がボーナス対象として記録されている日が${bonusPoints.length}日分しかないため、参考程度の数値です。使い続けるほど記録が増え、精度が上がります。</div>`
     : '';
+
+  // 「作成リスト」「ルート提案」の資金自動配分ボタンが使うのと同じロジックで、
+  // このタブ上でも「おすすめ製造個数」「マックス（×1.2）」を確認できるようにする。
+  const reco = await getRecommendedCraftQty(item, tier, ench);
+  const recoBasisLabel = reco.isBonusToday && reco.bonusSamples>=3
+    ? `本日ボーナス対象・過去のボーナス日実績（${reco.bonusSamples}日分）を基準`
+    : (reco.normalSamples>0 ? `通常日実績（${reco.normalSamples}日分）を基準` : '全期間平均を基準');
+  const recoBlock = `
+    <div class="card" style="margin-top:14px;">
+      <h3>🎯 おすすめ製造個数（本日時点）</h3>
+      <div class="sub">直近${RECO_LOOKBACK_DAYS}日間のブラックマーケット出来高から、ボーナスデーの影響（本日ボーナス対象かどうか）を考慮して推定しています。${recoBasisLabel}。</div>
+      <div class="routerows" style="margin-top:10px;">
+        <div class="routerow">
+          <span class="rerank">💡</span>
+          <div class="bstat"><span class="bk">おすすめ製造個数</span><span class="bv strong">${reco.recommendedQty} 個/日</span></div>
+          <div class="bstat"><span class="bk">マックス（おすすめ×1.2）</span><span class="bv strong" style="color:var(--gold);">${reco.maxQty} 個</span></div>
+          ${reco.isBonusToday ? '<span class="citybadge citybadge-miss">本日ボーナス対象</span>' : ''}
+        </div>
+      </div>
+      <div class="note">「作成リスト」「ルート提案」タブの「資金内で製造量を自動決定」ボタンは、このマックスを超えないように製造量を決定します（手動での追加はこれまで通りマックスを超えられます）。</div>
+    </div>
+  `;
 
   wrap.innerHTML = `
     <div class="card">
