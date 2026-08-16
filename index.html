@@ -840,6 +840,17 @@ body{
           登録した実績ログのみを根拠にしています。記録が少ないうちは参考程度に留めてください。
         </div>
       </div>
+      <div class="card" id="trendBulkCard" style="margin-top:14px;">
+        <div class="settingsbar-row">
+          <button type="button" class="tinybtn" id="trendBulkAnalyzeBtn">🔍 価格入力済みの装備をすべて自動分析しておすすめ個数を出す</button>
+        </div>
+        <div class="note">
+          ブラックマーケットの売値が入力されている装備（ティア・補正段階の組み合わせごと）を<b>すべて対象</b>に、AODPの出来高データからおすすめ製造個数と
+          マックス（おすすめ×1.2）をまとめて計算します。本日ボーナス対象の装備は、過去のボーナス日実績があればそちらを優先して反映します。
+          結果は利益率が高い順に並びます。「+ 追加」でその装備をおすすめ個数のぶんだけ作成リストに追加できます。
+        </div>
+        <div id="trendBulkResult" style="margin-top:8px;"></div>
+      </div>
       <div id="trendHistorySummary" style="margin-bottom:16px;"></div>
       <div class="searchrow"><input type="text" id="trendSearch" placeholder="装備名で検索…（例: Royal, Knight, Bow）"></div>
       <div id="trendItemList"></div>
