@@ -561,9 +561,9 @@ function refreshEverything(){
 
 /* ---------------------------------------------------------------------
    Step⑤: AODP (Albion Online Data Project) 連携
-   公開APIのため認証不要。素材・原材料はティア/エンチャントから機械的にIDを組み立てられる
-   ので一括自動取得、装備はSET名等がバラバラで誤取得のリスクがあるため、
-   1度だけ手動でAODPのアイテムIDを登録してもらい、以降はそのIDから自動取得する。
+   ここでは「販売数分析」タブの出来高（何個売れているか）の推定にのみ使う。
+   価格（原価・売値）はユーザー自身が入力する方針のため、AODPから価格を
+   自動取得して原価入力欄へ書き込む機能は持たない。
 --------------------------------------------------------------------- */
 const AODP_SERVERS = {
   west:   'https://west.albion-online-data.com',
@@ -571,79 +571,6 @@ const AODP_SERVERS = {
   europe: 'https://europe.albion-online-data.com',
 };
 let aodpServer = 'east'; // デフォルトはアジアサーバー（Albion East / Singapore）
-
-async function fetchAODPPrices(itemIds, {server, locations, qualities} = {}){
-  server = server || aodpServer;
-  const base = AODP_SERVERS[server];
-  // ロケーション名に空白等が含まれる場合（例：将来ロケーション名の表記が変わった場合）に備えてエンコードする
-  const locStr = (locations || CITIES).map(encodeURIComponent).join(',');
-  const qStr = (qualities || [1]).join(',');
-  const url = `${base}/api/v2/stats/prices/${itemIds.map(encodeURIComponent).join(',')}.json?locations=${locStr}&qualities=${qStr}`;
-  const res = await fetch(url);
-  if(!res.ok) throw new Error('AODP request failed: HTTP '+res.status);
-  return res.json();
-}
-
-// URL長制限（4096文字）を避けるため、アイテムIDをチャンクに分けて順番に取得する
-async function fetchAODPPricesChunked(itemIds, opts, chunkSize=80){
-  const all = [];
-  for(let i=0; i<itemIds.length; i+=chunkSize){
-    const chunk = itemIds.slice(i, i+chunkSize);
-    const data = await fetchAODPPrices(chunk, opts);
-    all.push(...data);
-  }
-  return all;
-}
-
-/* ---------------------------------------------------------------------
-   Step②: 取得データの鮮度判定
-   AODPの各priceフィールドには対応する "_date" フィールド（例: sell_price_min_date,
-   buy_price_max_date）が付いており、その価格が最後に更新された日時（UTCのナイーブな
-   日時文字列）を表す。これが設定した分数（デフォルト30分）より古い場合は、その値を
-   自動反映せず「鮮度切れ」として除外する。
---------------------------------------------------------------------- */
-function aodpRowAgeMinutes(dateStr){
-  if(!dateStr) return Infinity; // 日時が無い（=0扱いの古いデータ）場合は鮮度不明として最も古い扱いにする
-  // AODPは "2024-05-01T12:34:56" のようなタイムゾーン無し文字列（UTC想定）を返すため、
-  // 明示的にUTCとして解釈できるよう 'Z' を付与してからパースする。
-  const iso = /Z$|[+-]\d{2}:?\d{2}$/.test(dateStr) ? dateStr : dateStr + 'Z';
-  const t = Date.parse(iso);
-  if(isNaN(t)) return Infinity;
-  return (Date.now() - t) / 60000;
-}
-function getAodpFreshnessMinutes(){
-  return Number(STATE.settings.aodpFreshnessMinutes) || 30;
-}
-
-// 精製素材＋原材料の価格を、全都市分まとめて自動取得する（鮮度フィルタ適用：デフォルト30分以内のみ反映）
-async function syncMaterialsFromAODP(statusCb){
-  const ids = [];
-  const idMeta = {};
-  [...MATERIALS, ...RAW_MATERIALS].forEach(mat=>{
-    [1,2,3].forEach(t=>{
-      const id = materialAodpId(mat.id, t, 0);
-      if(id){ ids.push(id); idMeta[id] = {matId:mat.id, tier:t, ench:0}; }
-    });
-    TIERS4to8.forEach(t=> ENCH.forEach(e=>{
-      const id = materialAodpId(mat.id, t, e);
-      if(id){ ids.push(id); idMeta[id] = {matId:mat.id, tier:t, ench:e}; }
-    }));
-  });
-
-  if(statusCb) statusCb(`${ids.length}件のIDを取得中…`);
-  const data = await fetchAODPPricesChunked(ids, {locations: CITIES});
-  const maxAge = getAodpFreshnessMinutes();
-  let count = 0, staleCount = 0;
-  data.forEach(row=>{
-    if(!(row.sell_price_min>0)) return;
-    const meta = idMeta[row.item_id];
-    if(!meta) return;
-    if(aodpRowAgeMinutes(row.sell_price_min_date) > maxAge){ staleCount++; return; }
-    setPrice(row.city, meta.matId, meta.tier, meta.ench, row.sell_price_min);
-    count++;
-  });
-  return {count, staleCount};
-}
 
 function getAodpCode(itemId){
   return STATE.aodpMapping[itemId] || '';
@@ -719,59 +646,6 @@ function searchAODPItemIndex(query, limit=15){
   return aodpItemIndex
     .filter(e => e.name.toLowerCase().includes(q))
     .slice(0, limit);
-}
-
-// 1装備分の売値（通常都市・全都市・T4〜T8・全補正段階 ＋ ブラックマーケットのNPC買取価格）をAODPから取得する。
-// 入力されたAODPコードのティア部分（先頭の T{n}_）を差し替えて、各ティアのIDを組み立てる。
-// 通常都市は「売り注文の最安値(sell_price_min)」、ブラックマーケットは「買い注文の最高値(buy_price_max)」
-// を見る点が異なる（BMは既存の買い注文を即座に埋める形でしか売らない前提のため）。
-// どちらも設定した鮮度（デフォルト30分）より古いデータは反映しない。
-async function syncItemFromAODP(item){
-  const code = getAodpCode(item.id);
-  if(!code) return {count:0, staleCount:0};
-  const m = code.match(/^T\d+_(.+)$/);
-  if(!m) throw new Error('AODPコードは "T4_..." の形式で入力してください');
-  const suffix = m[1];
-
-  const ids = [];
-  const idMeta = {};
-  TIERS4to8.forEach(t=>{
-    ENCH.forEach(e=>{
-      const id = `T${t}_${suffix}` + (e>0 ? `@${e}` : '');
-      ids.push(id);
-      idMeta[id] = {tier:t, ench:e};
-    });
-  });
-
-  const maxAge = getAodpFreshnessMinutes();
-  let count = 0, staleCount = 0;
-
-  const data = await fetchAODPPricesChunked(ids, {locations: CITIES, qualities:[1]});
-  data.forEach(row=>{
-    if(!(row.sell_price_min>0)) return;
-    const meta = idMeta[row.item_id];
-    if(!meta) return;
-    if(aodpRowAgeMinutes(row.sell_price_min_date) > maxAge){ staleCount++; return; }
-    setSellPrice(row.city, item.id, meta.tier, meta.ench, row.sell_price_min);
-    count++;
-  });
-
-  // ブラックマーケットは通常都市と別ロケーションのため個別に取得する（失敗しても通常都市の結果は活かす）
-  try{
-    const bmData = await fetchAODPPricesChunked(ids, {locations:[AODP_BM_LOCATION], qualities:[1]});
-    bmData.forEach(row=>{
-      if(!(row.buy_price_max>0)) return;
-      const meta = idMeta[row.item_id];
-      if(!meta) return;
-      if(aodpRowAgeMinutes(row.buy_price_max_date) > maxAge){ staleCount++; return; }
-      setSellPrice(BM_LOCATION, item.id, meta.tier, meta.ench, row.buy_price_max);
-      count++;
-    });
-  }catch(err){
-    console.warn('ブラックマーケット価格の取得に失敗しました（ロケーション名が違う可能性があります）:', err);
-  }
-
-  return {count, staleCount};
 }
 
 /* ---------------------------------------------------------------------
@@ -1318,29 +1192,6 @@ document.getElementById('importFileInput').addEventListener('change', (e)=>{
 
 document.getElementById('aodpServerSelect').addEventListener('change', e=>{ aodpServer = e.target.value; });
 document.getElementById('aodpServerSelect').value = aodpServer; // 初期表示をJS側のデフォルト（アジアサーバー）に合わせる
-document.getElementById('aodpFreshnessMinutes').value = STATE.settings.aodpFreshnessMinutes;
-document.getElementById('aodpFreshnessMinutes').addEventListener('change', e=>{
-  STATE.settings.aodpFreshnessMinutes = Math.max(1, Number(e.target.value)||30);
-  e.target.value = STATE.settings.aodpFreshnessMinutes;
-  saveState();
-});
-document.getElementById('aodpSyncMaterialsBtn').addEventListener('click', async ()=>{
-  const statusEl = document.getElementById('aodpMaterialsStatus');
-  statusEl.textContent = '取得中…（少し時間がかかります）';
-  statusEl.className = 'aodpstatus';
-  try{
-    const {count, staleCount} = await syncMaterialsFromAODP(msg=>{ statusEl.textContent = msg; });
-    const maxAge = getAodpFreshnessMinutes();
-    statusEl.textContent = `${count}件の価格を取得・反映しました`
-      + (staleCount>0 ? `（鮮度${maxAge}分を超えていた${staleCount}件はスキップしました）` : '');
-    statusEl.className = 'aodpstatus ok';
-    buildRefinedGrid();
-    updateTopProfit();
-  }catch(err){
-    statusEl.textContent = '取得失敗: '+err.message+'（サーバーを変えて再試行してみてください）';
-    statusEl.className = 'aodpstatus err';
-  }
-});
 
 /* =======================================================================
    PAGE 1-A: 精製素材 price grid
@@ -1631,29 +1482,8 @@ function bindAodpBlockEvents(grid, items){
       renderEquipPricePage();
     });
   });
-
-  // 取得ボタンは廃止し、選択した瞬間に自動で価格取得する
-  grid.querySelectorAll('.aodpblock[data-aodp-item]').forEach(block=>{
-    const itemId = block.dataset.aodpItem;
-    const code = getAodpCode(itemId);
-    if(!code) return;
-    if(block.dataset.autoFetched) return; // 同じ描画内で二重取得しない
-    block.dataset.autoFetched = '1';
-    const item = items.find(i=>i.id===itemId);
-    const statusEl = block.querySelector('.aodpstatus');
-    statusEl.textContent = '価格を取得中…';
-    statusEl.className = 'aodpstatus';
-    syncItemFromAODP(item).then(({count, staleCount})=>{
-      statusEl.textContent = count>0
-        ? `${count}件の価格を取得しました（BM含む）` + (staleCount>0 ? `／鮮度切れ${staleCount}件はスキップ` : '')
-        : '価格が見つかりませんでした（登録し直してください）';
-      statusEl.className = 'aodpstatus ' + (count>0?'ok':'err');
-      updateTopProfit();
-    }).catch(err=>{
-      statusEl.textContent = '取得失敗: '+err.message;
-      statusEl.className = 'aodpstatus err';
-    });
-  });
+  // ※ このAODPコードは「販売数分析」タブの出来高（おすすめ製造個数）推定にのみ使う。
+  //   価格を自動取得して売値欄に書き込む処理は行わない（価格は必ずユーザーが自分で入力する）。
 }
 
 /* =======================================================================
