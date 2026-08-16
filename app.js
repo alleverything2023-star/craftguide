@@ -1902,17 +1902,17 @@ function buildGroups(category, list){
   })).filter(g=>g.items.length>0);
 }
 
-function renderItemPicker(pageId, wrap, renderRow){
+function renderItemPicker(pageId, wrap, renderRow, filterFn){
   wrap.innerHTML = '';
   const cat = pickerUIState.activeCategory[pageId];
   const term = pickerUIState.searchTerm[pageId];
   const expanded = pickerUIState.expandedGroups[pageId];
 
-  let list = ITEMS.filter(i=>i.category===cat);
-  if(term) list = ITEMS.filter(i=>i.name.toLowerCase().includes(term));
+  const base = filterFn ? ITEMS.filter(filterFn) : ITEMS;
+  let list = term ? base.filter(i=>i.name.toLowerCase().includes(term)) : base.filter(i=>i.category===cat);
 
   if(list.length===0){
-    wrap.innerHTML = `<div class="empty-hint">該当する装備が見つかりません</div>`;
+    wrap.innerHTML = `<div class="empty-hint">${filterFn ? '価格が入力済みの、該当する装備が見つかりません' : '該当する装備が見つかりません'}</div>`;
     return;
   }
 
@@ -2055,6 +2055,40 @@ function renderBuildPage(){
     });
     return row;
   });
+
+  const budgetBtn = document.getElementById('buildBudgetAllocateBtn');
+  if(budgetBtn && !budgetBtn.dataset.bound){
+    budgetBtn.dataset.bound = '1';
+    budgetBtn.addEventListener('click', async ()=>{
+      const input = document.getElementById('buildBudgetInput');
+      const budget = Number(input.value)||0;
+      const resultEl = document.getElementById('buildBudgetResult');
+      if(budget<=0){ resultEl.innerHTML = `<div class="empty-hint">資金を入力してください</div>`; return; }
+      budgetBtn.disabled = true;
+      resultEl.innerHTML = `<div class="empty-hint">おすすめ製造個数（販売数分析）を計算中…（AODPの出来高データを取得しています。少し時間がかかります）</div>`;
+      try{
+        const {allocated, spent, remaining} = await autoAllocateBudget(budget);
+        budgetBtn.disabled = false;
+        if(allocated.length===0){
+          resultEl.innerHTML = `<div class="empty-hint">この資金で新たに追加できる装備が見つかりませんでした（ブラックマーケットの売値・素材価格を確認するか、すでにマックスまで追加済みの可能性があります）。</div>`;
+          return;
+        }
+        resultEl.innerHTML = `
+          <div class="matneedgroup">
+            <div class="matneedgroup-title">利益率が高い順に追加しました（使用額 ${fmt(spent)} / 残り ${fmt(remaining)}）</div>
+            ${allocated.map(a=>`
+              <div class="matneedrow">
+                <span class="mnlabel">${a.item.name} T${a.tier}.${a.ench}${a.hasAodp?'':'（AODP未連携・簡易目安）'}</span>
+                <span class="mnqty">+${a.qtyAdded} 個 追加（合計${a.qtyTotal} / おすすめ${a.recommendedQty}×1.2=マックス${a.maxQty}）</span>
+                <span class="mncost">利益率 ${a.margin.toFixed(1)}%</span>
+              </div>`).join('')}
+          </div>`;
+      }catch(err){
+        budgetBtn.disabled = false;
+        resultEl.innerHTML = `<div class="empty-hint">計算に失敗しました: ${err.message}</div>`;
+      }
+    });
+  }
 
   renderCraftListPanel();
 }
@@ -2261,6 +2295,254 @@ function renderCraftListPanel(){
 }
 
 /* =======================================================================
+   おすすめ製造個数（販売数分析ベース）＋ 資金に応じた自動製造量決定
+   ---------------------------------------------------------------------
+   ・「販売数分析」タブと同じAODP日次出来高データを使い、装備ごとの
+     「1日あたりの目安販売数」を推定して“おすすめ製造個数”とする。
+   ・その装備の種類（武器種・防具種）が本日の日替わり生産ボーナス対象の場合は、
+     過去にボーナス対象だった日の出来高（記録が3日分以上あるもの）を優先的に使うことで、
+     ボーナスデーによる供給過多の影響を考慮する。記録が無ければ通常日の実績、
+     それも無ければ全期間平均を使う。
+   ・「マックス」＝おすすめ製造個数 × 1.2（切り上げ）。
+   ・AODP連携が無い装備は出来高を推定できないため、簡易な既定値を使う
+     （販売数分析タブの一覧には出てこないが、資金配分・作成リストには含まれ得るため）。
+======================================================================= */
+const DEFAULT_RECO_QTY = 5;          // AODP未連携時の簡易目安（個）
+const RECO_LOOKBACK_DAYS = 30;       // 出来高推定に使う過去日数
+const RECO_CACHE_MS = 20*60*1000;    // 同一装備・同一ティアの再計算をキャッシュする時間
+const recoQtyCache = {};             // craftKey -> {recommendedQty, maxQty, ...}
+
+async function getRecommendedCraftQty(item, tier, ench){
+  const key = craftKey(item.id, tier, ench);
+  const cached = recoQtyCache[key];
+  if(cached && (Date.now()-cached.ts) < RECO_CACHE_MS) return cached;
+
+  const isBonusToday = getBonus(item) > 0;
+  const aodpCode = getAodpCode(item.id);
+  let recommendedQty, avgVolume=null, bonusSamples=0, normalSamples=0;
+  const hasAodp = !!aodpCode;
+
+  if(!hasAodp){
+    recommendedQty = DEFAULT_RECO_QTY;
+  }else{
+    let points = [];
+    try{ points = await fetchAODPDailyPoints(item, tier, ench, BM_LOCATION, RECO_LOOKBACK_DAYS); }
+    catch(e){ points = []; }
+    if(points.length===0){
+      recommendedQty = DEFAULT_RECO_QTY;
+    }else{
+      const subKey = subtypeKey(item.category, item.subtype);
+      const bonusPts=[], normalPts=[];
+      points.forEach(p=>{
+        const dayLog = STATE.bonusHistory[p.date];
+        const wasBonus = !!(dayLog && dayLog[subKey]);
+        (wasBonus?bonusPts:normalPts).push(p);
+      });
+      bonusSamples = bonusPts.length; normalSamples = normalPts.length;
+      const avg = arr => arr.length ? arr.reduce((s,p)=>s+p.volume,0)/arr.length : 0;
+      if(isBonusToday && bonusSamples>=3){
+        avgVolume = avg(bonusPts);   // 本日ボーナス対象：過去のボーナス日実績を優先して反映
+      }else if(normalSamples>0){
+        avgVolume = avg(normalPts);  // 通常時：通常日の実績
+      }else{
+        avgVolume = avg(points);     // 内訳が無ければ全期間平均
+      }
+      recommendedQty = Math.max(1, Math.round(avgVolume));
+    }
+  }
+
+  const maxQty = Math.max(recommendedQty, Math.ceil(recommendedQty*1.2));
+  const result = {recommendedQty, maxQty, avgVolume, hasAodp, isBonusToday, bonusSamples, normalSamples, ts:Date.now()};
+  recoQtyCache[key] = result;
+  return result;
+}
+
+// 利益率が高い順にすべての(装備, ティア, 補正段階)の組み合わせを並べる。
+// 資金配分は常にブラックマーケット売値を使い、利益がプラスのものだけを対象にする。
+function buildMarginRankedCandidates(){
+  const results = [];
+  ITEMS.forEach(item=>{
+    TIERS4to8.forEach(t=>{
+      ENCH.forEach(e=>{
+        const sp = getSellPrice(BM_LOCATION, item.id, t, e);
+        if(sp<=0) return;
+        const c = computeItemCost(item, t, e);
+        const {net} = computeNetSell(sp, {isBlackMarket:true});
+        const profit = net - c.total;
+        if(profit<=0) return;
+        const margin = profit/sp*100;
+        results.push({item, tier:t, ench:e, sellPrice:sp, cost:c.total, profit, margin});
+      });
+    });
+  });
+  results.sort((a,b)=>b.margin-a.margin);
+  return results;
+}
+
+/**
+ * 資金を利益率が高い順に装備へ割り当て、装備ごとの「おすすめ製造個数×1.2（マックス）」を
+ * 超えないように作成リストへ追加していく。
+ * ・すでに手動でマックス以上を追加している装備はスキップ（触らない＝マックス超過を尊重）。
+ * ・マックス未満の装備は、資金が続く限りマックスまで積み増す。
+ */
+async function autoAllocateBudget(budget, opts={}){
+  const limit = opts.candidateLimit || 60; // AODP問い合わせ数を抑えるための対象上限（利益率上位のみ）
+  const candidates = buildMarginRankedCandidates().slice(0, limit);
+  const recoList = await Promise.all(candidates.map(c=>getRecommendedCraftQty(c.item, c.tier, c.ench)));
+
+  let remaining = Math.max(0, Number(budget)||0);
+  const allocated = [];
+  candidates.forEach((c, i)=>{
+    if(remaining<=0 || c.cost<=0) return;
+    const reco = recoList[i];
+    const key = craftKey(c.item.id, c.tier, c.ench);
+    const existingQty = STATE.craftList[key] ? STATE.craftList[key].qty : 0;
+    const room = reco.maxQty - existingQty; // 既にマックス以上なら0以下 → スキップ
+    if(room<=0) return;
+    const qtyByBudget = Math.floor(remaining / c.cost);
+    const qtyToAdd = Math.min(room, qtyByBudget);
+    if(qtyToAdd<=0) return;
+    remaining -= qtyToAdd * c.cost;
+    addToCraftList(c.item.id, c.tier, c.ench, qtyToAdd);
+    allocated.push({...c, qtyAdded:qtyToAdd, qtyTotal:existingQty+qtyToAdd,
+                     maxQty:reco.maxQty, recommendedQty:reco.recommendedQty, hasAodp:reco.hasAodp});
+  });
+  return {allocated, spent:(Number(budget)||0)-remaining, remaining};
+}
+
+/**
+ * 現在の作成リスト（entries: [{item,tier,ench,qty}]）をもとに、装備ごとに
+ * 「素材が最安の購入都市→利益が最大になるクラフト都市→最終目的地」を求め、
+ * 同じルート（購入都市→クラフト都市→最終目的地）ごとにグループ化してまとめる。
+ * calculateOptimalCraftRoutes() と同じロジックだが、全アイテムから最良の1件を探すのではなく、
+ * 渡されたリストのアイテム・ティア・補正段階・個数をそのまま使う点が異なる。
+ */
+function buildRouteSuggestionForEntries(entries, opts={}){
+  const destinationCity = opts.destinationCity || STATE.settings.destinationCity || 'Lymhurst';
+  const includeCaerleon = !!opts.includeCaerleon;
+  const candidateCities = includeCaerleon ? CITIES : CITY_RING;
+  const sellCity = BM_LOCATION;
+
+  const itemRoutes = entries.map(({item, tier, ench, qty})=>{
+    if(!item || !qty || qty<=0) return null;
+    const rawSellPrice = getSellPrice(sellCity, item.id, tier, ench);
+    if(rawSellPrice<=0) return null;
+    const {net} = computeNetSell(rawSellPrice, {isBlackMarket:true});
+
+    // a. 素材合計購入額が最も安い都市 (MaterialCity)
+    let materialCity=null, bestGrossTotal=Infinity;
+    candidateCities.forEach(buyCity=>{
+      const c = computeItemCost(item, tier, ench, buyCity, buyCity);
+      if(c.grossTotal>0 && c.grossTotal<bestGrossTotal){ bestGrossTotal=c.grossTotal; materialCity=buyCity; }
+    });
+    if(!materialCity) return null;
+
+    // b. 利益が最大となるクラフト都市 (CraftCity)（購入都市はMaterialCityに固定）
+    let craftBest=null;
+    candidateCities.forEach(craftCity=>{
+      const cost = computeItemCost(item, tier, ench, craftCity, materialCity);
+      const profit = net-cost.total;
+      if(!craftBest || profit>craftBest.profit) craftBest = {craftCity, cost, profit};
+    });
+    if(!craftBest) return null;
+
+    const margin = rawSellPrice>0 ? (craftBest.profit/rawSellPrice*100) : 0;
+    const raw = [materialCity, craftBest.craftCity, destinationCity];
+    const waypoints = raw.filter((c,i)=>i===0||c!==raw[i-1]);
+    return {
+      item, tier, ench, qty, materialCity, craftCity: craftBest.craftCity,
+      cost: craftBest.cost, sellPrice: rawSellPrice, net,
+      profitPerUnit: craftBest.profit, profitTotal: craftBest.profit*qty, margin,
+      waypoints, routeKey: waypoints.join(' -> '),
+    };
+  }).filter(Boolean);
+
+  const routesMap = {};
+  itemRoutes.forEach(r=>{ (routesMap[r.routeKey]=routesMap[r.routeKey]||[]).push(r); });
+  Object.values(routesMap).forEach(list=>list.sort((a,b)=>b.profitTotal-a.profitTotal));
+
+  const routeList = Object.keys(routesMap).map(routeKey=>{
+    const list = routesMap[routeKey];
+    const totalProfit = list.reduce((s,r)=>s+r.profitTotal,0);
+    const totalCost = list.reduce((s,r)=>s+r.cost*r.qty,0);
+
+    // 何をどこで何個買うか（購入都市＝list[0].materialCity。ルートキーが同じ＝同じ購入都市/クラフト都市のはず）
+    const materialsNeeded = {};
+    list.forEach(r=>{
+      const c = computeItemCost(r.item, r.tier, r.ench, r.craftCity, r.materialCity);
+      c.breakdown.forEach(b=>{
+        const k = `${b.id}_T${r.tier}_${r.ench}`;
+        if(!materialsNeeded[k]) materialsNeeded[k] = {label:b.label, tier:r.tier, ench:r.ench, qty:0, cost:0};
+        materialsNeeded[k].qty += b.rawQty*r.qty;
+        materialsNeeded[k].cost += b.grossCost*r.qty;
+      });
+      if(c.artifactQty>0){
+        const ak = `artifact_${r.item.id}_T${r.tier}`;
+        if(!materialsNeeded[ak]) materialsNeeded[ak] = {label:`${r.item.name} 用アーティファクト`, tier:r.tier, ench:r.ench, qty:0, cost:0};
+        materialsNeeded[ak].qty += c.artifactQty*r.qty;
+        materialsNeeded[ak].cost += c.artifactCost*r.qty;
+      }
+    });
+
+    return {
+      routeKey, waypoints:list[0].waypoints, buyCity:list[0].materialCity, craftCity:list[0].craftCity,
+      destinationCity, items:list, totalProfit, totalCost, materialsNeeded: Object.values(materialsNeeded),
+    };
+  });
+
+  routeList.sort((a,b)=>b.totalProfit-a.totalProfit);
+  return routeList;
+}
+
+function budgetRouteCardHtml(route){
+  const pathHtml = route.waypoints.map((c,i)=>{
+    const isLast = i===route.waypoints.length-1;
+    return `<span class="rp-city${isLast?' rp-bonus':''}">${CITY_LABELS_JA[c]||c}</span>`
+         + (i<route.waypoints.length-1 ? '<span class="rp-arrow">➔</span>' : '');
+  }).join('');
+
+  const buyRows = route.materialsNeeded.map(m=>`
+    <div class="matneedrow"><span class="mnlabel">${m.label} T${m.tier}.${m.ench}</span><span class="mnqty">${fmt(m.qty)} 個</span><span class="mncost">${fmt(m.cost)}</span></div>
+  `).join('');
+
+  const craftRows = route.items.map(r=>`
+    <div class="matneedrow">
+      <span class="mnlabel"><img class="artthumb" src="${r.item.file}" alt=""> ${r.item.name} T${r.tier}.${r.ench}</span>
+      <span class="mnqty">${fmt(r.qty)} 個 作る</span>
+      <span class="mncost">利益 ${r.profitTotal>=0?'+':''}${fmt(r.profitTotal)}（${r.margin.toFixed(1)}%）</span>
+    </div>`).join('');
+
+  return `
+    <div class="routerow" style="flex-direction:column;align-items:stretch;">
+      <div class="routepath" style="font-size:13.5px;">
+        ${pathHtml}
+        <span class="citybadge citybadge-hit" style="margin-left:8px;">このルートの合計利益 ${fmt(route.totalProfit)}</span>
+        <span class="citybadge">仕入れ合計 ${fmt(route.totalCost)}</span>
+      </div>
+      <div class="matneedgroup">
+        <div class="matneedgroup-title">🛒 購入: ${CITY_LABELS_JA[route.buyCity]||route.buyCity} で何を何個買うか</div>
+        ${buyRows || '<div class="empty-hint">購入する素材はありません</div>'}
+      </div>
+      <div class="matneedgroup">
+        <div class="matneedgroup-title">🔨 クラフト: ${CITY_LABELS_JA[route.craftCity]||route.craftCity} で何を何個作るか　→　🏁 最終目的地: ${CITY_LABELS_JA[route.destinationCity]||route.destinationCity}</div>
+        ${craftRows}
+      </div>
+    </div>
+  `;
+}
+
+function renderBudgetRouteSuggestion(routeList, wrap, {budget, spent, remaining}){
+  if(routeList.length===0){
+    wrap.innerHTML = `<div class="empty-hint">この予算・条件で製造できる装備が見つかりませんでした（ブラックマーケットの売値・素材価格が入力されているか確認してください）。</div>`;
+    return;
+  }
+  wrap.innerHTML = `
+    <div class="matneedgroup-title" style="margin-bottom:4px;">資金 ${fmt(budget)} のうち ${fmt(spent)} を使用（残り ${fmt(remaining)}）。作成リスト全体をもとに、ルートごとに購入・クラフトの内訳をまとめました（合計利益が高い順）。</div>
+    ${routeList.map(r=>budgetRouteCardHtml(r)).join('')}
+  `;
+}
+
+/* =======================================================================
    PAGE 3: おすすめ — 利益率の高いアイテムを提案
 ======================================================================= */
 function renderRecoPage(){
@@ -2374,6 +2656,36 @@ function renderRoutePage(){
     });
     return row;
   });
+
+  const routeBudgetBtn = document.getElementById('routeBudgetAllocateBtn');
+  if(routeBudgetBtn && !routeBudgetBtn.dataset.bound){
+    routeBudgetBtn.dataset.bound = '1';
+    routeBudgetBtn.addEventListener('click', async ()=>{
+      const input = document.getElementById('routeBudgetAllocInput');
+      const budget = Number(input.value)||0;
+      const resultEl = document.getElementById('routeBudgetResult');
+      if(budget<=0){ resultEl.innerHTML = `<div class="empty-hint">資金を入力してください</div>`; return; }
+      routeBudgetBtn.disabled = true;
+      resultEl.innerHTML = `<div class="empty-hint">おすすめ製造個数（販売数分析）を計算し、ルートを組み立てています…（少し時間がかかります）</div>`;
+      try{
+        const includeCaerleon = document.getElementById('routeNavIncludeCaerleon').checked;
+        const destinationCity = STATE.settings.destinationCity || 'Lymhurst';
+        const {spent, remaining} = await autoAllocateBudget(budget);
+
+        // ルート提案は「この機能で追加した分」だけでなく、作成リスト全体（手動追加分も含む）を対象にする
+        const entries = Object.values(STATE.craftList)
+          .map(entry=>({item: ITEMS.find(i=>i.id===entry.itemId), tier:entry.tier, ench:entry.ench, qty:entry.qty}))
+          .filter(e=>e.item && e.qty>0);
+        const routeList = buildRouteSuggestionForEntries(entries, {includeCaerleon, destinationCity});
+
+        routeBudgetBtn.disabled = false;
+        renderBudgetRouteSuggestion(routeList, resultEl, {budget, spent, remaining});
+      }catch(err){
+        routeBudgetBtn.disabled = false;
+        resultEl.innerHTML = `<div class="empty-hint">計算に失敗しました: ${err.message}</div>`;
+      }
+    });
+  }
 
   if(routeSelectedItem) computeAndRenderRoutes();
 }
@@ -2751,13 +3063,12 @@ function renderTrendPage(){
     tierSel.value = STATE.settings.tier;
     enchSel.value = STATE.settings.ench;
     tierSel.dataset.filled = '1';
-    document.getElementById('trendLocation').innerHTML =
-      CITIES.map(c=>`<option value="${c}">${CITY_LABELS_JA[c]}</option>`).join('')
-      + `<option value="${BM_LOCATION}">${BM_LABEL_JA}</option>`;
-    document.getElementById('trendLocation').value = STATE.settings.sellingCity;
-    tierSel.addEventListener('change', ()=>{ if(trendSelectedItem) computeAndRenderTrend(); });
-    enchSel.addEventListener('change', ()=>{ if(trendSelectedItem) computeAndRenderTrend(); });
-    document.getElementById('trendLocation').addEventListener('change', ()=>{ if(trendSelectedItem) computeAndRenderTrend(); });
+    // 分析する売却先はメインの利益源であるブラックマーケットに固定（都市は選べない）
+    document.getElementById('trendLocation').innerHTML = `<option value="${BM_LOCATION}">${BM_LABEL_JA}</option>`;
+    document.getElementById('trendLocation').value = BM_LOCATION;
+    // ティア・補正段階を変えると「価格入力済みの装備」の判定対象が変わるため、一覧も含めて再描画する
+    tierSel.addEventListener('change', renderTrendPage);
+    enchSel.addEventListener('change', renderTrendPage);
     document.getElementById('trendDays').addEventListener('change', ()=>{ if(trendSelectedItem) computeAndRenderTrend(); });
   }
 
@@ -2767,6 +3078,16 @@ function renderTrendPage(){
   search.value = pickerUIState.searchTerm.trend;
   search.oninput = (e)=>{ pickerUIState.searchTerm.trend = e.target.value.trim().toLowerCase(); renderTrendPage(); };
 
+  renderTrendItemList();
+
+  renderBonusHistorySummary();
+  if(trendSelectedItem) computeAndRenderTrend();
+}
+
+// ブラックマーケットの売値が入力済みの装備だけを一覧に出す（現在選択中のティア・補正段階が対象）
+function renderTrendItemList(){
+  const tier = Number(document.getElementById('trendTier').value);
+  const ench = Number(document.getElementById('trendEnch').value);
   renderItemPicker('trend', document.getElementById('trendItemList'), (item)=>{
     const row = document.createElement('div');
     row.className = 'itemrow';
@@ -2782,10 +3103,7 @@ function renderTrendPage(){
       computeAndRenderTrend();
     });
     return row;
-  });
-
-  renderBonusHistorySummary();
-  if(trendSelectedItem) computeAndRenderTrend();
+  }, item => getSellPrice(BM_LOCATION, item.id, tier, ench) > 0);
 }
 
 // ボーナス登録の実績ログ（曜日別の記録回数）。あくまで「これまでこのツールで記録した回数」であり、
