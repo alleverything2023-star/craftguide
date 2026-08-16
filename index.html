@@ -592,15 +592,10 @@ body{
               <option value="europe">Europe</option>
             </select>
           </div>
-          <div class="field" style="max-width:150px;">
-            <label>取得データの鮮度上限(分)</label>
-            <input type="number" id="aodpFreshnessMinutes" min="1" value="30" title="AODPの価格データがこの分数より古い場合は自動反映しません">
-          </div>
-          <button type="button" class="btn primary" id="aodpSyncMaterialsBtn">素材価格をAODPから一括取得</button>
-          <span class="aodpstatus" id="aodpMaterialsStatus"></span>
         </div>
         <div class="note" style="margin-top:8px;margin-bottom:0;">
-          Albion Online Data Project（無料の公開マーケットデータAPI）から、下の全素材・全都市の現在価格を自動取得します。取得した価格は「選択中の都市」に関わらず、各都市の欄にそのまま反映されます。
+          このサーバー設定は「販売数分析」タブや装備のAODP連携（出来高＝おすすめ製造個数の推定）でのみ使用します。
+          価格（原価・売値）はAODPから自動取得せず、すべてご自身で入力する仕様です。
         </div>
       </div>
       <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
