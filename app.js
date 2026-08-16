@@ -929,18 +929,51 @@ function toAodpLocationParam(loc){
   return loc === BM_LOCATION ? AODP_BM_LOCATION : loc;
 }
 
+// ブラックマーケットのロケーション表記はAODP側で 'BlackMarket' / 'Black Market'（半角スペースあり）
+// など複数パターンが確認されており、どちらが有効かはサーバー・時期によって変わりうる。
+// 「おすすめ製造個数」が常に既定値（5個）にしかならない場合、多くはここが原因（表記が合わず
+// 出来高0件のまま返ってきている）。候補を順番に試し、データが取れた表記をキャッシュして使い回す。
+const AODP_LOCATION_CANDIDATES = {
+  [BM_LOCATION]: ['BlackMarket', 'Black Market'],
+};
+const resolvedAodpLocationCache = {}; // loc -> 実際にデータが取れた表記（デバッグ表示にも使う）
+
+async function fetchAODPChartRaw(id, locationParam, days){
+  const base = AODP_SERVERS[aodpServer];
+  const url = `${base}/api/v2/stats/charts/${id}.json?locations=${encodeURIComponent(locationParam)}&time-scale=24&date=${daysAgoDateStr(days)}`;
+  const res = await fetch(url);
+  if(!res.ok) throw new Error('AODP chart request failed: HTTP '+res.status);
+  const data = await res.json();
+  return (data[0] && data[0].data) || [];
+}
+
+// locに対応するAODPロケーション表記の候補を順番に試し、データが取れた表記を返す（以後はキャッシュを再利用）。
+async function fetchAODPChartWithLocationFallback(id, loc, days){
+  if(resolvedAodpLocationCache[loc]){
+    return {raw: await fetchAODPChartRaw(id, resolvedAodpLocationCache[loc], days), locationParam: resolvedAodpLocationCache[loc]};
+  }
+  const candidates = AODP_LOCATION_CANDIDATES[loc] || [toAodpLocationParam(loc)];
+  let lastErr = null;
+  for(const cand of candidates){
+    try{
+      const raw = await fetchAODPChartRaw(id, cand, days);
+      if(raw.length>0){
+        resolvedAodpLocationCache[loc] = cand; // 当たった表記を記憶し、次回以降は1回の問い合わせで済ませる
+        return {raw, locationParam: cand};
+      }
+    }catch(err){ lastErr = err; }
+  }
+  if(lastErr) throw lastErr; // どの表記でも失敗（HTTPエラー等）した場合のみ例外を投げる
+  return {raw: [], locationParam: candidates[0]}; // 全表記で0件＝本当にその期間の出来高が無い
+}
+
 async function fetchAODPMarketStats(item, tier, ench, city, days=7){
   const code = getAodpCode(item.id);
   if(!code) return null;
   const m = code.match(/^T\d+_(.+)$/);
   if(!m) return null;
   const id = `T${tier}_${m[1]}` + (ench>0 ? `@${ench}` : '');
-  const base = AODP_SERVERS[aodpServer];
-  const url = `${base}/api/v2/stats/charts/${id}.json?locations=${encodeURIComponent(toAodpLocationParam(city))}&time-scale=24`;
-  const res = await fetch(url);
-  if(!res.ok) throw new Error('AODP chart request failed: HTTP '+res.status);
-  const data = await res.json();
-  const points = (data[0] && data[0].data) || [];
+  const {raw: points} = await fetchAODPChartWithLocationFallback(id, city, days);
   const recent = points.slice(-days);
 
   if(recent.length===0) return {city, avgVolume:0, avgPrice:0, volatility:0, trend:0, samples:0};
@@ -1909,7 +1942,7 @@ function renderBuildPage(){
             <div class="matneedgroup-title">利益率が高い順に追加しました（使用額 ${fmt(spent)} / 残り ${fmt(remaining)}）</div>
             ${allocated.map(a=>`
               <div class="matneedrow">
-                <span class="mnlabel">${a.item.name} T${a.tier}.${a.ench}${a.hasAodp?'':'（AODP未連携・簡易目安）'}</span>
+                <span class="mnlabel">${a.item.name} T${a.tier}.${a.ench}${a.usedRealData?'':'（簡易目安・AODP実データ未取得）'}</span>
                 <span class="mnqty">+${a.qtyAdded} 個 追加（合計${a.qtyTotal} / おすすめ${a.recommendedQty}×1.2=マックス${a.maxQty}）</span>
                 <span class="mncost">利益率 ${a.margin.toFixed(1)}%</span>
               </div>`).join('')}
@@ -2199,7 +2232,8 @@ async function getRecommendedCraftQty(item, tier, ench){
   }
 
   const maxQty = Math.max(recommendedQty, Math.ceil(recommendedQty*1.2));
-  const result = {recommendedQty, maxQty, avgVolume, hasAodp, isBonusToday, bonusSamples, normalSamples, ts:Date.now()};
+  const usedRealData = avgVolume !== null; // AODPリンク済みでも、データ0件なら結局フォールバック値を使っている
+  const result = {recommendedQty, maxQty, avgVolume, hasAodp, usedRealData, isBonusToday, bonusSamples, normalSamples, ts:Date.now()};
   recoQtyCache[key] = result;
   return result;
 }
@@ -2260,14 +2294,25 @@ function renderTrendBulkResult(list, wrap){
     wrap.innerHTML = `<div class="empty-hint">ブラックマーケットの売値が入力された装備が見つかりません。「原価入力 &gt; 装備売値・アーティファクト」で入力してください。</div>`;
     return;
   }
+  const realDataCount = list.filter(r=>r.usedRealData).length;
+  const linkedCount = list.filter(r=>r.hasAodp).length;
+  const resolvedLoc = resolvedAodpLocationCache[BM_LOCATION];
+  const diagLine = realDataCount===0
+    ? `<div class="note" style="margin-bottom:6px;">⚠ ${linkedCount}件がAODPにリンク済みですが、ブラックマーケットの出来高データが1件も取得できていません（全て簡易目安の5個を使用中）。
+       ${linkedCount===0
+         ? 'まず「原価入力 &gt; 装備売値・アーティファクト」で装備をAODPにリンクしてください。'
+         : 'リンクは正しいはずなので、AODP側にブラックマーケットの出来高データが無い/取得に失敗している可能性があります。ブラウザの開発者ツール(F12)のNetworkタブで「charts」というリクエストの結果を確認してみてください。'}
+       </div>`
+    : `<div class="note" style="margin-bottom:6px;">✅ ${realDataCount}/${list.length}件で実際のAODP出来高データを使用しています${resolvedLoc?`（ブラックマーケットのロケーション表記: <code>${resolvedLoc}</code>）`:''}。</div>`;
   wrap.innerHTML = `
+    ${diagLine}
     <div class="matneedgroup-title" style="margin-bottom:4px;">${list.length} 件を分析しました（利益率が高い順）。</div>
     ${list.map(r=>`
       <div class="matneedrow">
         <span class="mnlabel">
           <img class="artthumb" src="${r.item.file}" alt="">
           ${r.item.name} T${r.tier}.${r.ench}
-          ${r.hasAodp ? '<span class="citybadge citybadge-hit">AODP連携済</span>' : '<span class="citybadge">簡易目安</span>'}
+          ${r.usedRealData ? '<span class="citybadge citybadge-hit">実データ</span>' : (r.hasAodp ? '<span class="citybadge citybadge-miss">連携済だがデータ無し</span>' : '<span class="citybadge">未連携・簡易目安</span>')}
           ${r.isBonusToday ? '<span class="citybadge citybadge-hit">本日ボーナス対象</span>' : ''}
         </span>
         <span class="mnqty">おすすめ ${fmt(r.recommendedQty)} 個 ／ マックス ${fmt(r.maxQty)} 個</span>
@@ -2336,7 +2381,7 @@ async function autoAllocateBudget(budget, opts={}){
     remaining -= qtyToAdd * c.cost;
     addToCraftList(c.item.id, c.tier, c.ench, qtyToAdd);
     allocated.push({...c, qtyAdded:qtyToAdd, qtyTotal:existingQty+qtyToAdd,
-                     maxQty:reco.maxQty, recommendedQty:reco.recommendedQty, hasAodp:reco.hasAodp});
+                     maxQty:reco.maxQty, recommendedQty:reco.recommendedQty, hasAodp:reco.hasAodp, usedRealData:reco.usedRealData});
   });
 
   return {
@@ -3246,15 +3291,10 @@ async function fetchAODPDailyPoints(item, tier, ench, location, days=30){
   const m = code.match(/^T\d+_(.+)$/);
   if(!m) return [];
   const id = `T${tier}_${m[1]}` + (ench>0 ? `@${ench}` : '');
-  const base = AODP_SERVERS[aodpServer];
-  const url = `${base}/api/v2/stats/charts/${id}.json?locations=${encodeURIComponent(toAodpLocationParam(location))}&time-scale=24&date=${daysAgoDateStr(days)}`;
-  const res = await fetch(url);
-  if(!res.ok) throw new Error('AODP chart request failed: HTTP '+res.status);
-  const data = await res.json();
-  const points = (data[0] && data[0].data) || [];
-  return points.slice(-days).map(p=>{
-    const raw = p.timestamp || p.date || '';
-    return {date: String(raw).slice(0,10), avgPrice: Number(p.avg_price)||0, volume: Number(p.item_count)||0};
+  const {raw} = await fetchAODPChartWithLocationFallback(id, location, days);
+  return raw.slice(-days).map(p=>{
+    const rawDate = p.timestamp || p.date || '';
+    return {date: String(rawDate).slice(0,10), avgPrice: Number(p.avg_price)||0, volume: Number(p.item_count)||0};
   }).filter(p=>p.date && p.avgPrice>0);
 }
 function daysAgoDateStr(days){
