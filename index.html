@@ -196,6 +196,8 @@ body{
 }
 .citybtn:hover{border-color:var(--gold-soft);color:var(--text);}
 .citybtn.active{background:linear-gradient(90deg,#123420,#191e2a);color:#8ef0a8;border-color:#1d5c36;}
+.citybtn-bm{border-color:#3a2f16;color:var(--gold-soft);}
+.citybtn-bm.active{background:linear-gradient(90deg,#2a2211,#191e2a);color:var(--gold);border-color:var(--gold-soft);}
 
 .subtyperow{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;}
 .subtypeicon{
@@ -567,8 +569,8 @@ body{
       <label>価格を入力する都市（精製素材・装備売値・アーティファクトで共通）</label>
       <div class="equipcatrow" id="priceCityRow"></div>
       <div class="note" style="margin-top:8px;">
-        素材の仕入れ値は都市ごとに異なるため、全都市（ロイヤル5都市＋カエルレオン）を切り替えて入力できます（開いたときはリムハーストが選択された状態になります）。
-        売却先は常に<b>ブラックマーケット</b>固定のため、装備売値の入力欄は都市選択に関わらず常に1つだけ表示されます。
+        素材の仕入れ値・装備の売値は都市ごとに異なるため、都市タブ（マートロック〜カエルレオン）に加えて、末尾の<b>ブラックマーケット</b>タブに切り替えて入力できます（開いたときはリムハーストが選択された状態になります）。
+        装備の「売値」入力欄は、選択中のタブが通常都市かブラックマーケットかに応じて、保存先が自動的に切り替わります（ブラックマーケットではケープ・アーティファクト欠片の入力欄は表示されません＝買い取り対象外のため）。
       </div>
     </div>
 
