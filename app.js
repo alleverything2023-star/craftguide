@@ -213,7 +213,14 @@ function defaultSettings(){
     focus:false,                  // フォーカス使用（還元率+59%）
     saleType:'quick', premium:true,
     aodpFreshnessMinutes:30,      // AODPから取得したデータのうち、この分数より古いものは自動反映しない（鮮度フィルタ）
-    defaultRecoQty:5,             // AODPの出来高データが取れない装備に使う「おすすめ製造個数」の既定値
+    // 【詳細設定】カテゴリ（武器／胴／頭・足）× アーティファクトの有無 ごとの「作成リスト自動」の最大製造個数。
+    // 以前はAODP出来高の「おすすめ×1.2」を自動計算していたが、AODP側にデータが無い装備が多く実用的でなかったため、
+    // ここで直接ユーザーが指定した個数をそのまま上限として使う方式に変更した。
+    maxQtyByCategory:{
+      weapon:  {normal:5, artifact:5},
+      chest:   {normal:5, artifact:5},
+      headfoot:{normal:5, artifact:5},
+    },
   };
 }
 
@@ -1182,18 +1189,24 @@ function calculateOptimalCraftRoutes(opts={}){
 /* ---------------------------------------------------------------------
    Tab switching
 --------------------------------------------------------------------- */
+// タブ切替を共通化：他の場所（作成リストの「カーナビ開始」等）からもプログラムで
+// タブを切り替えられるようにする。ボタンクリックとまったく同じ処理を行う。
+function switchToPage(page){
+  document.querySelectorAll('.tabbtn').forEach(b=>b.classList.remove('active'));
+  const targetBtn = document.querySelector(`.tabbtn[data-page="${page}"]`);
+  if(targetBtn) targetBtn.classList.add('active');
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  const targetPage = document.getElementById('page-'+page);
+  if(targetPage) targetPage.classList.add('active');
+  if(page==='build') renderBuildPage();
+  if(page==='reco') renderRecoPage();
+  if(page==='route') renderRoutePage();
+  if(page==='trend') renderTrendPage();
+  if(page==='advsettings') renderAdvSettingsPage();
+}
+
 document.querySelectorAll('.tabbtn').forEach(btn=>{
-  btn.addEventListener('click', ()=>{
-    document.querySelectorAll('.tabbtn').forEach(b=>b.classList.remove('active'));
-    btn.classList.add('active');
-    const page = btn.dataset.page;
-    document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-    document.getElementById('page-'+page).classList.add('active');
-    if(page==='build') renderBuildPage();
-    if(page==='reco') renderRecoPage();
-    if(page==='route') renderRoutePage();
-    if(page==='trend') renderTrendPage();
-  });
+  btn.addEventListener('click', ()=> switchToPage(btn.dataset.page));
 });
 
 document.querySelectorAll('.subtabbtn').forEach(btn=>{
@@ -1722,17 +1735,13 @@ function renderSettingsBar(container, opts){
         <label>ステーション使用料（T4.0時点・silver）</label>
         <input type="number" id="stStationFeeBase" min="0" placeholder="0" value="${STATE.stationFeeBase||''}">
       </div>
-      <div class="field" style="max-width:260px;margin-top:4px;">
-        <label>AODP出来高データが無い装備の「おすすめ製造個数」既定値</label>
-        <input type="number" id="stDefaultRecoQty" min="1" step="1" value="${s.defaultRecoQty||5}">
-      </div>
       <div class="note">
         「新規追加時ティア／補正」は、下のリストから<b>新しく追加する</b>装備に使われるデフォルト値です。作成リストに追加済みの各行は、行ごとに個別のティア・補正段階を選べます（複数ティアを同時に計画できます）。<br>
         「クラフト都市」を選ぶと、その都市がボーナス都市になっている装備だけ自動的に+15%のボーナス還元率が適用されます。「購入都市」「販売都市」は、原価入力タブで都市ごとに入力した価格のうち、原価計算・利益計算にどの都市の価格を使うかを切り替えます。<br>
         ⚠ ここで選んだ「購入都市」が、原価入力タブの都市タブで実際に価格を入力した都市と<b>一致していないと、原価が0円のまま計算されてしまいます</b>（未入力として扱われるため）。原価入力タブでの選択都市と、この「購入都市」は必ず同じ都市に揃えてください（既定値はどちらもリムハーストです）。<br>
         ステーション使用料は「ティア＋補正段階の合計」が1上がるごとに倍になります（T4.0の金額を入力すれば、T4.1〜T8.4は自動計算されます。例：T4.1とT5.0は同額、T4.2とT5.1とT6.0は同額です）。<br>
         日替わりボーナス（+10%/+20%）は「原価入力 &gt; ボーナスデー」で登録した対象の武器種・防具種にのみ自動で加算されます。出品手数料は常に2.5%固定（売り注文の時のみ）、取引税はプレミアムなら4%・なしなら8%です。<br>
-        AODPにリンクしていない装備や、リンク済みでもブラックマーケットの出来高データが取得できない装備は、「販売数分析」「資金内で製造量を自動決定」などで、ここで設定した個数を簡易目安として使います（既定は5個）。
+        AODPにリンクしていない装備や、リンク済みでもブラックマーケットの出来高データが取得できない装備は、「販売数分析」「資金内で製造量を自動決定」などで、「詳細設定」タブで指定したカテゴリ別の個数を使います。
       </div>
     </div>
   `;
@@ -1746,11 +1755,6 @@ function renderSettingsBar(container, opts){
     setStationFeeBase(e.target.value);
     renderCraftListPanel();
     updateTopProfit();
-  });
-  document.getElementById('stDefaultRecoQty').addEventListener('change', e=>{
-    const v = Math.max(1, Math.round(Number(e.target.value)||5));
-    s.defaultRecoQty = v;
-    saveState();
   });
   document.getElementById('stSaleType').addEventListener('change', e=>{ s.saleType=e.target.value; saveState(); renderCraftListPanel(); updateTopProfit(); });
   document.getElementById('stPremium').addEventListener('change', e=>{ s.premium=e.target.checked; saveState(); renderCraftListPanel(); updateTopProfit(); });
@@ -1957,7 +1961,7 @@ function renderBuildPage(){
             ${allocated.map(a=>`
               <div class="matneedrow">
                 <span class="mnlabel">${a.item.name} T${a.tier}.${a.ench}${a.usedRealData?'':'（簡易目安・AODP実データ未取得）'}</span>
-                <span class="mnqty">+${a.qtyAdded} 個 追加（合計${a.qtyTotal} / おすすめ${a.recommendedQty}×1.2=マックス${a.maxQty}）</span>
+                <span class="mnqty">+${a.qtyAdded} 個 追加（合計${a.qtyTotal} / マックス${a.maxQty}）</span>
                 <span class="mncost">利益率 ${a.margin.toFixed(1)}%</span>
               </div>`).join('')}
           </div>`;
@@ -2211,6 +2215,10 @@ function renderCraftListPanel(){
           ? `作成リストは${routeList.length}種類の経路に分かれています。今回は利益が最も大きい経路（${routeList.length-1}経路が対象外）でカーナビを開始しました。他の経路は「ルート提案」タブから個別に開始できます。`
           : '';
       }
+      // カーナビの表示先（navPanel）は「ルート提案」タブの中にしかないため、
+      // 開始と同時にそのタブへ切り替える（これをしないと、内部的には開始されていても
+      // 画面上は「作成リスト」タブのままで何も表示されず、反応していないように見えてしまう）。
+      switchToPage('route');
     });
   }
 }
@@ -2224,17 +2232,31 @@ function renderCraftListPanel(){
      過去にボーナス対象だった日の出来高（記録が3日分以上あるもの）を優先的に使うことで、
      ボーナスデーによる供給過多の影響を考慮する。記録が無ければ通常日の実績、
      それも無ければ全期間平均を使う。
-   ・「マックス」＝おすすめ製造個数 × 1.2（切り上げ）。
-   ・AODP連携が無い装備は出来高を推定できないため、簡易な既定値を使う
-     （販売数分析タブの一覧には出てこないが、資金配分・作成リストには含まれ得るため）。
+   ・「マックス」＝「詳細設定」でカテゴリ（武器／胴／頭・足）×アーティファクトの有無ごとに
+     指定した個数をそのまま使う（AODPのおすすめ個数に連動した自動計算はしない）。
+   ・AODP連携が無い装備は出来高を推定できないため、この「マックス」と同じ値を
+     “おすすめ製造個数”としても使う（販売数分析タブの一覧には出てこないが、
+     資金配分・作成リストには含まれ得るため）。
 ======================================================================= */
 const RECO_LOOKBACK_DAYS = 30;       // 出来高推定に使う過去日数
 const RECO_CACHE_MS = 20*60*1000;    // 同一装備・同一ティアの再計算をキャッシュする時間
 const recoQtyCache = {};             // craftKey -> {recommendedQty, maxQty, ...}
-// AODPの出来高データが取れない装備に使う既定値。固定の5ではなく設定画面から変更できるようにしてある
-// （AODP側にそもそもデータが無い装備も多いため、5個という数字自体に強く依存しないようにする）。
-function getDefaultRecoQty(){
-  const v = Number(STATE.settings.defaultRecoQty);
+
+// カテゴリを「詳細設定」の3グループ（武器／胴／頭・足）にまとめる。
+// ケープ・オフハンド等はいったん対象外（該当なしはnullを返す）。
+function getMaxQtyCategoryGroup(item){
+  if(item.category==='weapon') return 'weapon';
+  if(item.category==='chest') return 'chest';
+  if(item.category==='head' || item.category==='foot') return 'headfoot';
+  return null;
+}
+// 「詳細設定」で指定したカテゴリ×アーティファクトの有無ごとの最大製造個数を取得する。
+// 対象外カテゴリ（ケープ・オフハンド等）は、とりあえず武器グループの通常値を暫定値として使う。
+function getConfiguredMaxQty(item){
+  const group = getMaxQtyCategoryGroup(item) || 'weapon';
+  const artKey = isArtifactItem(item) ? 'artifact' : 'normal';
+  const table = STATE.settings.maxQtyByCategory || {};
+  const v = Number(table[group] && table[group][artKey]);
   return (v>0) ? v : 5;
 }
 
@@ -2245,17 +2267,18 @@ async function getRecommendedCraftQty(item, tier, ench){
 
   const isBonusToday = getBonus(item) > 0;
   const aodpCode = getAodpCode(item.id);
+  const maxQty = getConfiguredMaxQty(item); // 「詳細設定」で指定した固定の上限
   let recommendedQty, avgVolume=null, bonusSamples=0, normalSamples=0;
   const hasAodp = !!aodpCode;
 
   if(!hasAodp){
-    recommendedQty = getDefaultRecoQty();
+    recommendedQty = maxQty;
   }else{
     let points = [];
     try{ points = await fetchAODPDailyPoints(item, tier, ench, BM_LOCATION, RECO_LOOKBACK_DAYS); }
     catch(e){ points = []; }
     if(points.length===0){
-      recommendedQty = getDefaultRecoQty();
+      recommendedQty = maxQty;
     }else{
       const subKey = subtypeKey(item.category, item.subtype);
       const bonusPts=[], normalPts=[];
@@ -2277,7 +2300,6 @@ async function getRecommendedCraftQty(item, tier, ench){
     }
   }
 
-  const maxQty = Math.max(recommendedQty, Math.ceil(recommendedQty*1.2));
   const usedRealData = avgVolume !== null; // AODPリンク済みでも、データ0件なら結局フォールバック値を使っている
   const result = {recommendedQty, maxQty, avgVolume, hasAodp, usedRealData, isBonusToday, bonusSamples, normalSamples, ts:Date.now()};
   recoQtyCache[key] = result;
@@ -2380,7 +2402,7 @@ function renderTrendBulkResult(list, wrap){
 }
 
 /**
- * 資金を利益率が高い順に装備へ割り当て、装備ごとの「おすすめ製造個数×1.2（マックス）」を
+ * 資金を利益率が高い順に装備へ割り当て、装備ごとの「詳細設定」で指定したマックスを
  * 超えないように作成リストへ追加していく。
  * ・すでに手動でマックス以上を追加している装備はスキップ（触らない＝マックス超過を尊重）。
  * ・マックス未満の装備は、資金が続く限りマックスまで積み増す。
@@ -2396,7 +2418,7 @@ function budgetAllocateEmptyReason(result){
     return 'ブラックマーケットの売値が入力済みで、かつ利益がプラスになる装備が見つかりません。「原価入力 &gt; 装備売値・アーティファクト」でブラックマーケットの売値を、「原価入力 &gt; 精製素材」で素材価格を入力してください。';
   }
   if(cappedCount>=totalCandidates){
-    return `候補 ${totalCandidates} 件はすべて、すでに「おすすめ製造個数×1.2（マックス）」まで作成リストに入っています。これ以上はこの機能では追加されません（数量を減らすか、通常の「追加」でマックスを超えて手動追加してください）。`;
+    return `候補 ${totalCandidates} 件はすべて、すでに「詳細設定」で指定したマックスまで作成リストに入っています。これ以上はこの機能では追加されません（数量を減らすか、通常の「追加」でマックスを超えて手動追加してください）。`;
   }
   if(cheapestAffordable!=null){
     return `資金が足りません。追加できる中でもっとも安い装備でも1個あたり ${fmt(cheapestAffordable)} silver かかります。`;
@@ -2552,6 +2574,74 @@ function renderBudgetRouteSuggestion(routeList, wrap, {budget, spent, remaining}
       const route = lastBudgetRouteList[Number(btn.dataset.budgetroute)];
       const items = route.items.map(r=>({item:r.item, tier:r.tier, ench:r.ench, profit:r.profitPerUnit, sellPrice:r.sellPrice, qty:r.qty}));
       startNav(route.buyCity, route.craftCity, route.destinationCity, route.waypoints, items);
+    });
+  });
+}
+
+/* =======================================================================
+   PAGE 6: 詳細設定
+   ---------------------------------------------------------------------
+   ・プレミアム有無（既に自動で端末に保存されるが、ここでもまとめて確認・変更できるようにする）
+   ・「作成リスト自動」（資金内で製造量を自動決定・販売数分析の一括分析）が使う
+     カテゴリ（武器／胴／頭・足）×アーティファクトの有無ごとの最大製造個数
+======================================================================= */
+function renderAdvSettingsPage(){
+  const wrap = document.getElementById('advSettingsPanel');
+  const s = STATE.settings;
+  const groups = [
+    {key:'weapon',   label:'武器'},
+    {key:'chest',    label:'胴'},
+    {key:'headfoot', label:'頭・足'},
+  ];
+
+  wrap.innerHTML = `
+    <div class="card">
+      <h3>詳細設定</h3>
+      <div class="sub">ここでの変更はこの端末に自動保存され、次回もそのまま使われます。</div>
+
+      <div class="field" style="margin-top:14px;">
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+          <input type="checkbox" id="advPremium" ${s.premium?'checked':''}>
+          プレミアム加入中（取引税4%。未加入は8%）
+        </label>
+      </div>
+
+      <h4 style="margin-top:22px; margin-bottom:4px;">作成リスト自動の最大製造個数</h4>
+      <div class="note" style="margin-bottom:10px;">
+        「資金内で製造量を自動決定」「販売数分析の一括分析」など、装備の必要数を自動で決める機能が使う上限個数です。
+        カテゴリ（武器／胴／頭・足）と、アーティファクト（欠片）が必要な装備かどうかで、それぞれ個別に指定できます。
+        （ケープ・オフハンドは今のところ対象外です）
+      </div>
+      <div class="maxqtygrid">
+        <div class="maxqtygrid-head">
+          <span></span><span>通常装備</span><span>アーティファクト装備</span>
+        </div>
+        ${groups.map(g=>`
+          <div class="maxqtygrid-row">
+            <span class="maxqtygrid-label">${g.label}</span>
+            <input type="number" min="1" step="1" class="maxqtyinput" data-group="${g.key}" data-artkey="normal" value="${(s.maxQtyByCategory[g.key]&&s.maxQtyByCategory[g.key].normal)||5}">
+            <input type="number" min="1" step="1" class="maxqtyinput" data-group="${g.key}" data-artkey="artifact" value="${(s.maxQtyByCategory[g.key]&&s.maxQtyByCategory[g.key].artifact)||5}">
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+
+  document.getElementById('advPremium').addEventListener('change', e=>{
+    s.premium = e.target.checked;
+    saveState();
+    renderCraftListPanel();
+    updateTopProfit();
+  });
+
+  wrap.querySelectorAll('.maxqtyinput').forEach(inp=>{
+    inp.addEventListener('change', e=>{
+      const group = e.target.dataset.group;
+      const artKey = e.target.dataset.artkey;
+      const v = Math.max(1, Math.round(Number(e.target.value)||5));
+      if(!s.maxQtyByCategory[group]) s.maxQtyByCategory[group] = {normal:5, artifact:5};
+      s.maxQtyByCategory[group][artKey] = v;
+      saveState();
     });
   });
 }
@@ -3284,7 +3374,7 @@ async function computeAndRenderTrend(){
     : '';
 
   // 「作成リスト」「ルート提案」の資金自動配分ボタンが使うのと同じロジックで、
-  // このタブ上でも「おすすめ製造個数」「マックス（×1.2）」を確認できるようにする。
+  // このタブ上でも「おすすめ製造個数」「マックス（詳細設定で指定した個数）」を確認できるようにする。
   const reco = await getRecommendedCraftQty(item, tier, ench);
   const recoBasisLabel = reco.isBonusToday && reco.bonusSamples>=3
     ? `本日ボーナス対象・過去のボーナス日実績（${reco.bonusSamples}日分）を基準`
@@ -3297,7 +3387,7 @@ async function computeAndRenderTrend(){
         <div class="routerow">
           <span class="rerank">💡</span>
           <div class="bstat"><span class="bk">おすすめ製造個数</span><span class="bv strong">${reco.recommendedQty} 個/日</span></div>
-          <div class="bstat"><span class="bk">マックス（おすすめ×1.2）</span><span class="bv strong" style="color:var(--gold);">${reco.maxQty} 個</span></div>
+          <div class="bstat"><span class="bk">マックス（詳細設定）</span><span class="bv strong" style="color:var(--gold);">${reco.maxQty} 個</span></div>
           ${reco.isBonusToday ? '<span class="citybadge citybadge-miss">本日ボーナス対象</span>' : ''}
         </div>
       </div>
