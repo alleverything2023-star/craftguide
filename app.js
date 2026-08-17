@@ -733,6 +733,26 @@ function setAodpCode(itemId, code, name){
 function getAodpEnglishName(itemId){
   return STATE.aodpMappingNames ? (STATE.aodpMappingNames[itemId]||'') : '';
 }
+// 現在AODPにリンク済みの装備が何件あるかを数える。
+// 「おすすめ製造個数」が常に5個になる原因の多くは、通信エラーではなく
+// そもそも装備が1件もAODPにリンクされていないことなので、ボタンを押さなくても
+// 常に見える場所にこの件数を出すことで気づきやすくする。
+function countAodpLinkedItems(){
+  return Object.keys(STATE.aodpMapping || {}).filter(id => STATE.aodpMapping[id]).length;
+}
+function renderAodpLinkStatusBanner(){
+  const linked = countAodpLinkedItems();
+  const total = ITEMS.length;
+  if(linked===0){
+    return `<div class="note" style="margin-bottom:10px; border:1px solid var(--red,#c0392b);">
+      ⚠ 現在、AODPにリンクされている装備が<b>0件</b>です。装備がAODPにリンクされていないと通信自体が発生せず、
+      「おすすめ製造個数」は全て既定値の<b>5個</b>になります（この場合エラーは出ません＝正常な動作です）。<br>
+      「原価入力 &gt; 装備売値・アーティファクト」タブを開き、各装備の <b>英語名検索</b> から候補を選んでリンクしてください。
+      リンクした装備だけがAODPの実データ（出来高）を使った推定に切り替わります。
+    </div>`;
+  }
+  return `<div class="note" style="margin-bottom:10px;">ℹ 現在 <b>${linked}/${total}件</b> の装備がAODPにリンク済みです。リンクされていない装備は既定値の5個のままになります。</div>`;
+}
 
 /* ---------------------------------------------------------------------
    AODPアイテムID検索（タイポ防止のための選択式UI用データソース）
@@ -2039,6 +2059,9 @@ function renderBuildPage(){
   renderSettingsBar(document.getElementById('buildSettingsBar'), {onChange: renderBuildPage});
   renderCategorySidebar('build', document.getElementById('buildCategoryList'), renderBuildPage);
 
+  const buildLinkStatusEl = document.getElementById('buildAodpLinkStatusBanner');
+  if(buildLinkStatusEl) buildLinkStatusEl.innerHTML = renderAodpLinkStatusBanner();
+
   const search = document.getElementById('buildSearch');
   search.value = pickerUIState.searchTerm.build;
   search.oninput = (e)=>{ pickerUIState.searchTerm.build = e.target.value.trim().toLowerCase(); renderBuildPage(); };
@@ -3278,6 +3301,8 @@ function renderTrendPage(){
   }
 
   renderCategorySidebar('trend', document.getElementById('trendCategoryList'), renderTrendPage);
+  const linkStatusEl = document.getElementById('aodpLinkStatusBanner');
+  if(linkStatusEl) linkStatusEl.innerHTML = renderAodpLinkStatusBanner();
 
   const search = document.getElementById('trendSearch');
   search.value = pickerUIState.searchTerm.trend;
