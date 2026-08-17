@@ -1626,8 +1626,10 @@ function renderAodpBlockHtml(item){
         <span class="aodpchip-id">${code}</span>
         ${enName ? `<span class="aodpchip-name">${enName}</span>` : ''}
         <button type="button" class="tinybtn aodpchangebtn" data-aodp-item="${item.id}">変更</button>
+        <button type="button" class="tinybtn aodptestbtn" data-aodp-item="${item.id}" style="font-size:10px;">📊 出来高テスト取得</button>
       </div>
       <div class="aodpstatus" data-aodp-status="${item.id}"></div>
+      <div class="aodptestresult" data-aodp-testresult="${item.id}"></div>
     </div>`;
   }
   return `<div class="aodpblock" data-aodp-item="${item.id}">
@@ -1731,6 +1733,35 @@ function bindAodpBlockEvents(grid, items){
       }
       setAodpCode(itemId, code, '');
       renderEquipPricePage();
+    });
+  });
+
+  // 「📊 出来高テスト取得」：ティア4〜8それぞれで実際に何件のデータが返ってくるかをその場で表示する。
+  // 「接続はできているのに取得できない」場合の切り分け用（0件なら本当にAODP側にデータが無いだけの
+  // 可能性が高く、コードのバグではないと判断できる）。
+  grid.querySelectorAll('.aodptestbtn').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const itemId = btn.dataset.aodpItem;
+      const item = items.find(i=>i.id===itemId);
+      const resultEl = grid.querySelector(`[data-aodp-testresult="${CSS.escape(itemId)}"]`);
+      if(!item || !resultEl) return;
+      resultEl.innerHTML = `<div class="empty-hint">取得中…</div>`;
+      const code = getAodpCode(itemId);
+      const rows = await Promise.all(TIERS4to8.map(async tier=>{
+        try{
+          const points = await fetchAODPDailyPoints(item, tier, 0, BM_LOCATION, RECO_LOOKBACK_DAYS);
+          return {tier, ok:true, count:points.length, sample: points.slice(-3).map(p=>`${p.date}:${p.volume}個`).join(', ')};
+        }catch(err){
+          return {tier, ok:false, count:0, sample: `${err.name}: ${err.message}`};
+        }
+      }));
+      const resolvedLoc = resolvedAodpLocationCache[BM_LOCATION] || '(未解決)';
+      resultEl.innerHTML = `
+        <div class="note" style="margin-top:4px;">
+          問い合わせID例: <code>${code.replace(/^T\d+_/, `T${TIERS4to8[0]}_`)}</code>　／　ロケーション表記: <code>${resolvedLoc}</code>
+          ${rows.map(r=>`<div style="margin-top:2px;">T${r.tier}: ${r.ok ? `${r.count}件の日次データ${r.count>0?`（直近: ${r.sample}）`:''}` : `❌ ${r.sample}`}</div>`).join('')}
+          ${rows.every(r=>r.ok && r.count===0) ? '<div style="margin-top:4px;">→ 通信は成功していますが、全ティアで出来高データが0件でした。この装備自体、直近30日間ブラックマーケットでの取引が記録されていない可能性があります（コードのタイプミスがないか、albion-online-data.comのIdentifierページで該当コードを検索して確認してみてください）。</div>' : ''}
+        </div>`;
     });
   });
   // ※ このAODPコードは「販売数分析」タブの出来高（おすすめ製造個数）推定にのみ使う。
