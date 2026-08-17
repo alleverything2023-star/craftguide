@@ -1121,7 +1121,11 @@ const resolvedAodpLocationCache = {}; // loc -> 実際にデータが取れた�
 
 async function fetchAODPChartRaw(id, locationParam, days){
   const base = AODP_SERVERS[aodpServer];
-  const url = `${base}/api/v2/stats/charts/${id}.json?locations=${encodeURIComponent(locationParam)}&time-scale=24&date=${daysAgoDateStr(days)}`;
+  // AODPの/stats/charts APIは「date（開始日）」だけを送るとサーバー側は日付範囲を解釈できず、
+  // エラーにはならないまま出来高0件の空データを返してくる（公式ドキュメントでも date と end_date は
+  // 必ずセットで使う例のみが示されている）。これが「おすすめ製造個数」が常に既定値の5個になる
+  // 主原因だったため、終了日（end_date＝今日）も必ず付ける。
+  const url = `${base}/api/v2/stats/charts/${id}.json?locations=${encodeURIComponent(locationParam)}&time-scale=24&date=${daysAgoDateStr(days)}&end_date=${daysAgoDateStr(0)}`;
   const res = await fetch(url);
   if(!res.ok) throw new Error('AODP chart request failed: HTTP '+res.status);
   const data = await res.json();
