@@ -2,6 +2,47 @@
    Albion 装備クラフト原価計算ツール
    ========================================================================== */
 
+/* ---------------------------------------------------------------------
+   グローバルエラー表示（タブレット等、開発者ツール(F12)のコンソールを開けない
+   端末向け）。JSの実行時エラー・Promiseの未処理rejectionを画面下部に
+   常時表示し、発生日時・エラーメッセージ・発生箇所（ファイル:行:列）を
+   そのまま表示する。これにより「何かおかしいが原因が分からない」状態を防ぐ。
+--------------------------------------------------------------------- */
+(function initGlobalErrorBanner(){
+  let entries = [];
+  function render(){
+    const banner = document.getElementById('globalErrorBanner');
+    const list = document.getElementById('globalErrorBannerList');
+    if(!banner || !list) return; // banner要素が無いページでは何もしない
+    if(entries.length===0){ banner.style.display='none'; return; }
+    banner.style.display='block';
+    list.innerHTML = entries.slice(0,20).map(e=>`
+      <div style="margin-bottom:6px; padding-bottom:6px; border-bottom:1px solid rgba(255,255,255,.2);">
+        <div>[${e.time}] <b>${e.kind}</b></div>
+        <div style="word-break:break-all;">${e.message}</div>
+        ${e.where ? `<div style="opacity:.7;">${e.where}</div>` : ''}
+      </div>`).join('');
+  }
+  function push(kind, message, where){
+    entries.unshift({time: new Date().toLocaleTimeString('ja-JP'), kind, message: String(message), where});
+    if(entries.length>20) entries.length = 20;
+    render();
+  }
+  window.addEventListener('error', ev=>{
+    const where = ev.filename ? `${ev.filename}:${ev.lineno}:${ev.colno}` : '';
+    push('JSエラー', ev.message || (ev.error && ev.error.message) || String(ev), where);
+  });
+  window.addEventListener('unhandledrejection', ev=>{
+    const reason = ev.reason;
+    const message = (reason && reason.message) ? reason.message : String(reason);
+    push('未処理のPromiseエラー', message, '');
+  });
+  document.addEventListener('DOMContentLoaded', ()=>{
+    const closeBtn = document.getElementById('globalErrorBannerClose');
+    if(closeBtn) closeBtn.addEventListener('click', ()=>{ entries = []; render(); });
+  });
+})();
+
 const CATS = [
   {id:'head',   label:'頭防具',       ic:'🪖'},
   {id:'chest',  label:'胴防具',       ic:'👕'},
@@ -572,6 +613,109 @@ const AODP_SERVERS = {
 };
 let aodpServer = 'east'; // デフォルトはアジアサーバー（Albion East / Singapore）
 
+/* ---------------------------------------------------------------------
+   通信エラーの可視化ログ
+   AODPとの通信（fetch）で失敗が起きても、これまでは catch で握りつぶして
+   「おすすめ製造個数」が既定値の5個にフォールバックするだけで、原因が
+   画面上には一切表示されていなかった（開発者ツール(F12)のコンソール/Networkタブを
+   見ないと分からない）。タブレット等コンソールを開けない端末でも原因が分かるよう、
+   発生したエラーをここに記録し、UI上（販売数分析タブなど）に表示する。
+--------------------------------------------------------------------- */
+const AODP_ERROR_LOG = [];        // {ts, context, message}
+const AODP_ERROR_LOG_MAX = 40;    // 直近N件だけ保持
+function logAodpError(context, err){
+  const message = (err && err.message) ? String(err.message) : String(err);
+  AODP_ERROR_LOG.unshift({ts: Date.now(), context: String(context), message});
+  if(AODP_ERROR_LOG.length > AODP_ERROR_LOG_MAX) AODP_ERROR_LOG.length = AODP_ERROR_LOG_MAX;
+}
+function clearAodpErrorLog(){ AODP_ERROR_LOG.length = 0; }
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+// 直近のエラーをメッセージ内容でグルーピングし、件数の多い順に並べる（同じ原因を何十行も出さないため）
+function summarizeAodpErrors(){
+  const groups = {};
+  AODP_ERROR_LOG.forEach(e=>{
+    if(!groups[e.message]) groups[e.message] = {message:e.message, count:0, lastTs:0, sampleContext:e.context};
+    groups[e.message].count++;
+    if(e.ts > groups[e.message].lastTs){ groups[e.message].lastTs = e.ts; groups[e.message].sampleContext = e.context; }
+  });
+  return Object.values(groups).sort((a,b)=>b.count-a.count);
+}
+// AODPエラーの警告バナーHTML（エラーが無ければ空文字）。
+// 「おすすめ製造個数」が5個ばかりになる不具合の主原因はほぼ確実にこの通信エラーのため、
+// 実際に起きたエラーメッセージをそのまま画面に出す（F12が開けないタブレットでも原因が分かるように）。
+function renderAodpErrorBanner(){
+  if(AODP_ERROR_LOG.length===0) return '';
+  const summary = summarizeAodpErrors();
+  const rows = summary.slice(0,6).map(g=>{
+    const t = new Date(g.lastTs).toLocaleTimeString('ja-JP');
+    return `<div style="margin-top:4px;">・<code>${escapeHtml(g.message)}</code>　(${g.count}件／例: ${escapeHtml(g.sampleContext)}／最終発生 ${t})</div>`;
+  }).join('');
+  return `
+    <div class="note" style="margin-bottom:6px; border:1px solid var(--red,#c0392b);">
+      ⚠ AODP（Albion Online Data Project）との通信で以下のエラーが発生しています。
+      「おすすめ製造個数」が全て既定値の5個になっている場合、ほぼこれが原因です。<br>
+      ${rows}
+      <div style="margin-top:6px;">
+        よくある原因：①タブレットのブラウザ/ネットワークが east.albion-online-data.com 等への接続をブロックしている（広告・トラッキングブロッカー、機内モード的な通信制限、学校・会社のネット規制など）
+        ②AODPサーバー側が一時的にダウンしている　③選択中のサーバー（東/西/欧州）が実際のプレイサーバーと合っていない。<br>
+        まずは画面上部の「サーバー」選択が合っているか確認し、Wi-Fi⇔モバイル回線の切り替えや別ブラウザでの再試行をお試しください。
+      </div>
+    </div>`;
+}
+
+// AODP接続テスト：コンソール(F12)が開けないタブレット等でも原因が分かるよう、
+// 3サーバーそれぞれに実際にfetchしてみて、成功/失敗と生のエラー内容をそのまま画面に表示する。
+// 軽量な /api/v2/stats/prices エンドポイント（既知アイテム1件）を使い、通信そのものの可否を確認する。
+async function runAodpConnectivityTest(resultEl){
+  resultEl.innerHTML = `<div class="empty-hint">接続テスト中…</div>`;
+  const testItemId = 'T4_BAG'; // 常に存在する低ティア汎用アイテムでテスト
+  const rows = await Promise.all(Object.entries(AODP_SERVERS).map(async ([key, base])=>{
+    const url = `${base}/api/v2/stats/prices/${testItemId}.json?locations=Caerleon`;
+    const t0 = performance.now();
+    try{
+      const res = await fetch(url);
+      const ms = Math.round(performance.now()-t0);
+      if(!res.ok){
+        return {key, base, ok:false, ms, detail:`HTTP ${res.status} ${res.statusText}`};
+      }
+      const data = await res.json();
+      return {key, base, ok:true, ms, detail:`OK（${Array.isArray(data)?data.length:0}件のデータを受信）`};
+    }catch(err){
+      const ms = Math.round(performance.now()-t0);
+      // fetch自体が失敗する場合、ブラウザは詳細な理由を教えてくれないことが多いが、
+      // 典型的には「オフライン」「CORSブロック」「広告/トラッキングブロッカーによる遮断」「DNS失敗」等。
+      return {key, base, ok:false, ms, detail: `${err.name}: ${err.message}`};
+    }
+  }));
+
+  const anyOk = rows.some(r=>r.ok);
+  const currentOk = rows.find(r=>r.key===aodpServer && r.ok);
+  const rowsHtml = rows.map(r=>`
+    <div class="routerow">
+      <span class="rerank">${r.ok?'✅':'❌'}</span>
+      <div class="bstat"><span class="bk">${r.key}${r.key===aodpServer?'（現在選択中）':''}</span><span class="bv" style="font-size:12px;">${r.base}</span></div>
+      <div class="bstat"><span class="bk">結果</span><span class="bv strong ${r.ok?'profit-pos':'profit-neg'}">${escapeHtml(r.detail)}</span></div>
+      <div class="bstat"><span class="bk">応答時間</span><span class="bv">${r.ms}ms</span></div>
+    </div>`).join('');
+
+  let summary;
+  if(!anyOk){
+    summary = `❌ 3サーバーすべてに接続できませんでした。この端末（またはこのネットワーク）からalbion-online-data.comへの通信がブロックされている可能性が高いです。
+      Wi-Fi⇔モバイル回線の切り替え、VPN/広告ブロッカーの無効化、別ブラウザでの再試行をお試しください。`;
+  }else if(!currentOk){
+    summary = `⚠ 現在選択中のサーバー「${aodpServer}」には接続できませんでしたが、他のサーバーには接続できました。画面上部の「サーバー」選択を、実際にプレイしているサーバーに合わせて変更してください。`;
+  }else{
+    summary = `✅ 現在選択中のサーバー「${aodpServer}」への接続は正常です。それでも「おすすめ製造個数」が5個ばかりになる場合は、対象の装備がAODPにリンクされていないか、その装備自体の出来高データが無い可能性があります。`;
+  }
+
+  resultEl.innerHTML = `
+    <div class="note" style="margin-bottom:6px;">${summary}</div>
+    <div class="routerows">${rowsHtml}</div>
+  `;
+}
+
 function getAodpCode(itemId){
   return STATE.aodpMapping[itemId] || '';
 }
@@ -733,20 +877,18 @@ function subtypeKey(category, subtype){
 function getBonusForSubtype(category, subtype){
   return Number(STATE.bonusSubtypes[subtypeKey(category, subtype)] || 0); // 0 / 10 / 20
 }
-// ゲーム内のデイリーボーナス切り替え時刻は「UTC 10:00（日本時間 19:00）」であり、
-// カレンダー上の日付境界（UTC 0:00 / 各端末のローカル日付境界）とはズレている。
-// そのため、実際の日時からこのオフセット分だけ巻き戻した時刻の「UTC日付」を
-// 「ゲーム内のボーナス日」として扱う。
-//   ・UTC 10:00（日本時間19:00）より前 → まだ前日分のボーナス日として扱う
-//   ・UTC 10:00（日本時間19:00）以降   → 当日分のボーナス日に切り替わる
-const BONUS_RESET_UTC_HOUR = 10; // UTC 10:00 = JST 19:00
+// ゲーム内のデイリーボーナス切り替え時刻は「UTC 0:00（日本時間 9:00）」。
+// これはカレンダー上のUTC日付境界そのものと一致するため、UTCの日付フィールドを
+// そのまま「ゲーム内のボーナス日」として扱えばよい（それより前は独自オフセットで
+// 巻き戻していたが、UTC 0:00基準になったことでオフセットは不要＝0時間になった）。
+const BONUS_RESET_UTC_HOUR = 0; // UTC 0:00 = JST 9:00
 function getBonusGameDate(now){
   const base = now instanceof Date ? now : new Date();
   const shifted = new Date(base.getTime() - BONUS_RESET_UTC_HOUR*60*60*1000);
   // ローカルタイムゾーンの影響を受けないよう、UTCのフィールドだけで日付キーを組み立てる
   return new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()));
 }
-// 「ゲーム内のボーナス日」の日付キー（YYYY-MM-DD、UTC 10:00 / 日本時間19:00 切り替え基準）
+// 「ゲーム内のボーナス日」の日付キー（YYYY-MM-DD、UTC 0:00 / 日本時間9:00 切り替え基準）
 function todayKey(now){
   const d = getBonusGameDate(now);
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
@@ -961,7 +1103,7 @@ async function fetchAODPChartWithLocationFallback(id, loc, days){
         resolvedAodpLocationCache[loc] = cand; // 当たった表記を記憶し、次回以降は1回の問い合わせで済ませる
         return {raw, locationParam: cand};
       }
-    }catch(err){ lastErr = err; }
+    }catch(err){ lastErr = err; logAodpError(`${loc}（表記候補:${cand}）`, err); }
   }
   if(lastErr) throw lastErr; // どの表記でも失敗（HTTPエラー等）した場合のみ例外を投げる
   return {raw: [], locationParam: candidates[0]}; // 全表記で0件＝本当にその期間の出来高が無い
@@ -994,7 +1136,7 @@ async function fetchMarketStatsForCities(item, tier, ench, cities, days){
   if(!getAodpCode(item.id)) return {}; // AODPコード未登録なら市場データ無しとして扱う（フィルタは効かせない）
   const entries = await Promise.all(cities.map(async city=>{
     try{ return [city, await fetchAODPMarketStats(item, tier, ench, city, days)]; }
-    catch(e){ return [city, null]; }
+    catch(e){ logAodpError(`${item.name} @ ${city}`, e); return [city, null]; }
   }));
   const map = {};
   entries.forEach(([city, stats])=>{ if(stats) map[city] = stats; });
@@ -1526,7 +1668,7 @@ function bindAodpBlockEvents(grid, items){
 let bonusCategory = 'weapon';
 
 function renderBonusPage(){
-  // ゲーム内のボーナス切り替え時刻（UTC 10:00 / 日本時間19:00）を基準にした「現在のボーナス日」と、
+  // ゲーム内のボーナス切り替え時刻（UTC 0:00 / 日本時間9:00）を基準にした「現在のボーナス日」と、
   // 次回切り替わりまでの残り時間を表示する（カレンダー日付とズレることを利用者に明示するため）。
   const infoWrap = document.getElementById('bonusDayInfo');
   if(infoWrap){
@@ -1538,8 +1680,9 @@ function renderBonusPage(){
     const hLeft = Math.floor(msLeft/3600000);
     const mLeft = Math.floor((msLeft%3600000)/60000);
     const nextResetJST = new Date(nextResetUTC.getTime() + 9*60*60*1000);
-    const jstStr = `${nextResetJST.getUTCFullYear()}-${String(nextResetJST.getUTCMonth()+1).padStart(2,'0')}-${String(nextResetJST.getUTCDate()).padStart(2,'0')} 19:00 (JST)`;
-    infoWrap.innerHTML = `📅 現在のボーナス日: <b>${gameDateKey}</b>（UTC 10:00 / 日本時間19:00 切り替え基準） ・ 次回切り替わりまで残り <b>${hLeft}時間${mLeft}分</b>（${jstStr}）`;
+    const jstHour = String((BONUS_RESET_UTC_HOUR+9)%24).padStart(2,'0');
+    const jstStr = `${nextResetJST.getUTCFullYear()}-${String(nextResetJST.getUTCMonth()+1).padStart(2,'0')}-${String(nextResetJST.getUTCDate()).padStart(2,'0')} ${jstHour}:00 (JST)`;
+    infoWrap.innerHTML = `📅 現在のボーナス日: <b>${gameDateKey}</b>（UTC 0:00 / 日本時間9:00 切り替え基準） ・ 次回切り替わりまで残り <b>${hLeft}時間${mLeft}分</b>（${jstStr}）`;
   }
 
   // 現在登録中の一覧
@@ -1934,10 +2077,11 @@ function renderBuildPage(){
         const {allocated, spent, remaining} = result;
         budgetBtn.disabled = false;
         if(allocated.length===0){
-          resultEl.innerHTML = `<div class="empty-hint">${budgetAllocateEmptyReason(result)}</div>`;
+          resultEl.innerHTML = `${renderAodpErrorBanner()}<div class="empty-hint">${budgetAllocateEmptyReason(result)}</div>`;
           return;
         }
         resultEl.innerHTML = `
+          ${renderAodpErrorBanner()}
           <div class="matneedgroup">
             <div class="matneedgroup-title">利益率が高い順に追加しました（使用額 ${fmt(spent)} / 残り ${fmt(remaining)}）</div>
             ${allocated.map(a=>`
@@ -2207,7 +2351,7 @@ async function getRecommendedCraftQty(item, tier, ench){
   }else{
     let points = [];
     try{ points = await fetchAODPDailyPoints(item, tier, ench, BM_LOCATION, RECO_LOOKBACK_DAYS); }
-    catch(e){ points = []; }
+    catch(e){ points = []; logAodpError(`${item.name} T${tier}.${ench}`, e); }
     if(points.length===0){
       recommendedQty = DEFAULT_RECO_QTY;
     }else{
@@ -2284,6 +2428,7 @@ function buildAllPricedCandidates(){
 
 // ブラックマーケットの売値が入力済みの装備をすべて対象に、おすすめ製造個数・マックスを一括計算する。
 async function analyzeAllPricedItems(){
+  clearAodpErrorLog(); // 今回の分析で発生したエラーだけをバナーに表示するため、実行前にログをクリアする
   const candidates = buildAllPricedCandidates();
   const recoList = await Promise.all(candidates.map(c=>getRecommendedCraftQty(c.item, c.tier, c.ench)));
   return candidates.map((c, i)=>({...c, ...recoList[i]}));
@@ -2297,14 +2442,18 @@ function renderTrendBulkResult(list, wrap){
   const realDataCount = list.filter(r=>r.usedRealData).length;
   const linkedCount = list.filter(r=>r.hasAodp).length;
   const resolvedLoc = resolvedAodpLocationCache[BM_LOCATION];
+  const errorBanner = renderAodpErrorBanner(); // 実際に発生した通信エラーがあればここに表示される（F12不要）
   const diagLine = realDataCount===0
     ? `<div class="note" style="margin-bottom:6px;">⚠ ${linkedCount}件がAODPにリンク済みですが、ブラックマーケットの出来高データが1件も取得できていません（全て簡易目安の5個を使用中）。
        ${linkedCount===0
          ? 'まず「原価入力 &gt; 装備売値・アーティファクト」で装備をAODPにリンクしてください。'
-         : 'リンクは正しいはずなので、AODP側にブラックマーケットの出来高データが無い/取得に失敗している可能性があります。ブラウザの開発者ツール(F12)のNetworkタブで「charts」というリクエストの結果を確認してみてください。'}
+         : (errorBanner
+             ? '下に具体的なエラー内容を表示しています。'
+             : 'リンクは正しいはずですが、AODP側にブラックマーケットの出来高データが無い可能性があります（通信エラーは検出されていません）。')}
        </div>`
     : `<div class="note" style="margin-bottom:6px;">✅ ${realDataCount}/${list.length}件で実際のAODP出来高データを使用しています${resolvedLoc?`（ブラックマーケットのロケーション表記: <code>${resolvedLoc}</code>）`:''}。</div>`;
   wrap.innerHTML = `
+    ${errorBanner}
     ${diagLine}
     <div class="matneedgroup-title" style="margin-bottom:4px;">${list.length} 件を分析しました（利益率が高い順）。</div>
     ${list.map(r=>`
@@ -2359,6 +2508,7 @@ function budgetAllocateEmptyReason(result){
 }
 
 async function autoAllocateBudget(budget, opts={}){
+  clearAodpErrorLog(); // 今回の自動配分で発生したエラーだけをバナーに表示するため、実行前にログをクリアする
   const candidates = buildMarginRankedCandidates();
   const recoList = await Promise.all(candidates.map(c=>getRecommendedCraftQty(c.item, c.tier, c.ench)));
 
@@ -2649,10 +2799,11 @@ function renderRoutePage(){
 
         routeBudgetBtn.disabled = false;
         if(entries.length===0){
-          resultEl.innerHTML = `<div class="empty-hint">${budgetAllocateEmptyReason(result)}</div>`;
+          resultEl.innerHTML = `${renderAodpErrorBanner()}<div class="empty-hint">${budgetAllocateEmptyReason(result)}</div>`;
           return;
         }
         renderBudgetRouteSuggestion(routeList, resultEl, {budget, spent, remaining});
+        resultEl.insertAdjacentHTML('afterbegin', renderAodpErrorBanner());
         if(allocated.length===0){
           resultEl.insertAdjacentHTML('afterbegin', `<div class="note" style="margin-bottom:8px;">ℹ この資金では新規追加はありませんでした（${budgetAllocateEmptyReason(result)}）。既存の作成リストの内容でルートを組みました。</div>`);
         }
@@ -3106,6 +3257,9 @@ function renderTrendPage(){
     tierSel.addEventListener('change', renderTrendPage);
     enchSel.addEventListener('change', renderTrendPage);
     document.getElementById('trendDays').addEventListener('change', ()=>{ if(trendSelectedItem) computeAndRenderTrend(); });
+
+    const connTestBtn = document.getElementById('aodpConnTestBtn');
+    connTestBtn.addEventListener('click', ()=>{ runAodpConnectivityTest(document.getElementById('aodpConnTestResult')); });
 
     const bulkBtn = document.getElementById('trendBulkAnalyzeBtn');
     bulkBtn.addEventListener('click', async ()=>{
