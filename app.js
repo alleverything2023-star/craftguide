@@ -690,7 +690,23 @@ async function runAodpConnectivityTest(resultEl){
     }
   }));
 
-  const anyOk = rows.some(r=>r.ok);
+  // 装備をAODPにリンクする際の「英語名検索」機能は、価格取得サーバー（east/west/europe）とは
+  // 別のドメイン（raw.githubusercontent.com、GitHub）から16MBのアイテムデータベースを取得している。
+  // 学校・会社・タブレットのネットワーク制限ではGitHubだけがブロックされているケースもあるため、
+  // こちらも別枠で確認する（HEADリクエストで実体はダウンロードせず疎通だけ見る）。
+  const ghT0 = performance.now();
+  let ghRow;
+  try{
+    const ghRes = await fetch(AODP_ITEM_DB_URL, {method:'HEAD'});
+    const ghMs = Math.round(performance.now()-ghT0);
+    ghRow = {key:'github', base:'raw.githubusercontent.com（英語名検索用データベース）', ok: ghRes.ok, ms: ghMs, detail: ghRes.ok ? 'OK' : `HTTP ${ghRes.status} ${ghRes.statusText}`};
+  }catch(err){
+    const ghMs = Math.round(performance.now()-ghT0);
+    ghRow = {key:'github', base:'raw.githubusercontent.com（英語名検索用データベース）', ok:false, ms:ghMs, detail:`${err.name}: ${err.message}`};
+  }
+  rows.push(ghRow);
+
+  const anyOk = rows.filter(r=>r.key!=='github').some(r=>r.ok);
   const currentOk = rows.find(r=>r.key===aodpServer && r.ok);
   const rowsHtml = rows.map(r=>`
     <div class="routerow">
@@ -708,6 +724,9 @@ async function runAodpConnectivityTest(resultEl){
     summary = `⚠ 現在選択中のサーバー「${aodpServer}」には接続できませんでしたが、他のサーバーには接続できました。画面上部の「サーバー」選択を、実際にプレイしているサーバーに合わせて変更してください。`;
   }else{
     summary = `✅ 現在選択中のサーバー「${aodpServer}」への接続は正常です。それでも「おすすめ製造個数」が5個ばかりになる場合は、対象の装備がAODPにリンクされていないか、その装備自体の出来高データが無い可能性があります。`;
+  }
+  if(!ghRow.ok){
+    summary += `<br>⚠ 英語名検索用データベース（GitHub: raw.githubusercontent.com）への接続に失敗しています。これが失敗していると「原価入力 &gt; 装備売値・アーティファクト」の英語名検索が使えず、装備を1件もAODPにリンクできません。この場合は下の「原価入力」タブで各装備の欄に出る「コードを直接入力」を使ってください（albion-online-data.com/identifier や /items で調べたコードをそのまま貼り付けられます）。`;
   }
 
   resultEl.innerHTML = `
@@ -1613,6 +1632,14 @@ function renderAodpBlockHtml(item){
     </div>
     <div class="aodpresults" data-aodp-results="${item.id}"></div>
     <div class="aodpstatus" data-aodp-status="${item.id}"></div>
+    <div class="aodpmanualrow" style="margin-top:4px;">
+      <button type="button" class="tinybtn aodpmanualbtn" data-aodp-item="${item.id}" style="font-size:10px; padding:2px 6px;">🔧 コードを直接入力（検索が使えない場合）</button>
+      <div class="aodpmanualform" data-aodp-manualform="${item.id}" style="display:none; margin-top:4px;">
+        <input type="text" class="aodpmanualinput" placeholder="例: T4_SHOES_PLATE_SET1" data-aodp-manualinput="${item.id}" style="text-transform:uppercase;">
+        <button type="button" class="tinybtn aodpmanualsavebtn" data-aodp-item="${item.id}">保存</button>
+        <div class="note" style="margin-top:2px;">albion-online-data.com の「Identifier」または「Items」ページでUniqueName（例: <code>T4_SHOES_PLATE_SET1</code>）を調べて、そのまま貼り付けてください。英語名検索（GitHubのデータベース取得）が通信環境の都合で使えない場合の代替手段です。</div>
+      </div>
+    </div>
   </div>`;
 }
 
@@ -1674,6 +1701,31 @@ function bindAodpBlockEvents(grid, items){
   grid.querySelectorAll('.aodpchangebtn').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       setAodpCode(btn.dataset.aodpItem, ''); // 空にする＝未登録扱いに戻す
+      renderEquipPricePage();
+    });
+  });
+
+  // 「コードを直接入力」：英語名検索用データベース（GitHub）がネットワーク制限で
+  // 取得できない環境向けの代替手段。albion-online-data.comのIdentifier/Itemsページ等で
+  // 調べたUniqueNameをそのまま貼り付けてリンクできる（入力チェックは最小限）。
+  grid.querySelectorAll('.aodpmanualbtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const itemId = btn.dataset.aodpItem;
+      const formEl = grid.querySelector(`[data-aodp-manualform="${CSS.escape(itemId)}"]`);
+      if(formEl) formEl.style.display = formEl.style.display==='none' ? 'block' : 'none';
+    });
+  });
+  grid.querySelectorAll('.aodpmanualsavebtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const itemId = btn.dataset.aodpItem;
+      const manualInput = grid.querySelector(`[data-aodp-manualinput="${CSS.escape(itemId)}"]`);
+      const statusEl = grid.querySelector(`[data-aodp-status="${CSS.escape(itemId)}"]`);
+      const code = (manualInput.value||'').trim().toUpperCase();
+      if(!code){
+        if(statusEl){ statusEl.textContent = 'コードを入力してください'; statusEl.className = 'aodpstatus err'; }
+        return;
+      }
+      setAodpCode(itemId, code, '');
       renderEquipPricePage();
     });
   });
