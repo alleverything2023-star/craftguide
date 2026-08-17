@@ -1737,8 +1737,11 @@ function bindAodpBlockEvents(grid, items){
   });
 
   // 「📊 出来高テスト取得」：ティア4〜8それぞれで実際に何件のデータが返ってくるかをその場で表示する。
-  // 「接続はできているのに取得できない」場合の切り分け用（0件なら本当にAODP側にデータが無いだけの
-  // 可能性が高く、コードのバグではないと判断できる）。
+  // 「接続はできているのに取得できない」場合の切り分け用。
+  // ブラックマーケットだけでなく、比較のため通常の都市市場（カエルリオン）でも同じ装備・同じ日数で
+  // テストする。カエルリオン側は取れるのにブラックマーケット側だけ0件なら、ブラックマーケットの
+  // ロケーション表記（'BlackMarket' / 'Black Market'）そのものが間違っている可能性が高いと分かる。
+  // 両方とも0件なら、その装備のコード自体か、直近の取引記録が無いだけの可能性が高い。
   grid.querySelectorAll('.aodptestbtn').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       const itemId = btn.dataset.aodpItem;
@@ -1747,20 +1750,39 @@ function bindAodpBlockEvents(grid, items){
       if(!item || !resultEl) return;
       resultEl.innerHTML = `<div class="empty-hint">取得中…</div>`;
       const code = getAodpCode(itemId);
-      const rows = await Promise.all(TIERS4to8.map(async tier=>{
-        try{
-          const points = await fetchAODPDailyPoints(item, tier, 0, BM_LOCATION, RECO_LOOKBACK_DAYS);
-          return {tier, ok:true, count:points.length, sample: points.slice(-3).map(p=>`${p.date}:${p.volume}個`).join(', ')};
-        }catch(err){
-          return {tier, ok:false, count:0, sample: `${err.name}: ${err.message}`};
-        }
+      const testLocations = [
+        {key: BM_LOCATION, label: 'ブラックマーケット'},
+        {key: 'Caerleon', label: 'カエルリオン市場（比較用）'},
+      ];
+      const results = await Promise.all(testLocations.map(async loc=>{
+        const rows = await Promise.all(TIERS4to8.map(async tier=>{
+          try{
+            const points = await fetchAODPDailyPoints(item, tier, 0, loc.key, RECO_LOOKBACK_DAYS);
+            return {tier, ok:true, count:points.length, sample: points.slice(-3).map(p=>`${p.date}:${p.volume}個`).join(', ')};
+          }catch(err){
+            return {tier, ok:false, count:0, sample: `${err.name}: ${err.message}`};
+          }
+        }));
+        return {loc, rows, resolvedLoc: resolvedAodpLocationCache[loc.key] || '(未解決)'};
       }));
-      const resolvedLoc = resolvedAodpLocationCache[BM_LOCATION] || '(未解決)';
+      const bmAllZero = results[0].rows.every(r=>r.ok && r.count===0);
+      const caerAnyData = results[1].rows.some(r=>r.ok && r.count>0);
+      let diagnosis = '';
+      if(bmAllZero && caerAnyData){
+        diagnosis = '→ カエルリオン市場ではデータが取れるのにブラックマーケットだけ0件です。ブラックマーケットのロケーション表記が間違っている可能性が高いです（アプリ側の不具合の可能性）。この内容を開発側に伝えてください。';
+      }else if(bmAllZero && !caerAnyData){
+        diagnosis = '→ ブラックマーケット・カエルリオン市場ともに全ティアで0件でした。コード自体が間違っているか（albion-online-data.comのIdentifierページで再確認してください）、この装備は最近ほとんど取引されていない可能性があります。';
+      }else if(!bmAllZero){
+        diagnosis = '→ ブラックマーケットのデータが取得できています。「おすすめ製造個数」に反映されるはずです。';
+      }
       resultEl.innerHTML = `
         <div class="note" style="margin-top:4px;">
-          問い合わせID例: <code>${code.replace(/^T\d+_/, `T${TIERS4to8[0]}_`)}</code>　／　ロケーション表記: <code>${resolvedLoc}</code>
-          ${rows.map(r=>`<div style="margin-top:2px;">T${r.tier}: ${r.ok ? `${r.count}件の日次データ${r.count>0?`（直近: ${r.sample}）`:''}` : `❌ ${r.sample}`}</div>`).join('')}
-          ${rows.every(r=>r.ok && r.count===0) ? '<div style="margin-top:4px;">→ 通信は成功していますが、全ティアで出来高データが0件でした。この装備自体、直近30日間ブラックマーケットでの取引が記録されていない可能性があります（コードのタイプミスがないか、albion-online-data.comのIdentifierページで該当コードを検索して確認してみてください）。</div>' : ''}
+          問い合わせID例: <code>${code.replace(/^T\d+_/, `T${TIERS4to8[0]}_`)}</code>
+          ${results.map(res=>`
+            <div style="margin-top:6px;"><b>${res.loc.label}</b>（表記: <code>${res.resolvedLoc}</code>）</div>
+            ${res.rows.map(r=>`<div style="margin-left:8px;">T${r.tier}: ${r.ok ? `${r.count}件の日次データ${r.count>0?`（直近: ${r.sample}）`:''}` : `❌ ${r.sample}`}</div>`).join('')}
+          `).join('')}
+          <div style="margin-top:6px;">${diagnosis}</div>
         </div>`;
     });
   });
