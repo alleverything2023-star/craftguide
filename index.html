@@ -348,6 +348,14 @@ body{
   width:100%;background:#0e1119;border:1px solid var(--border);color:var(--text);
   padding:9px 11px;border-radius:8px;font-size:13.5px;outline:none;
 }
+
+.maxqtygrid{display:grid;grid-template-columns:80px 1fr 1fr;gap:8px;align-items:center;max-width:420px;}
+.maxqtygrid-head{display:contents;}
+.maxqtygrid-head span{font-size:11px;color:var(--text-dim);font-weight:600;}
+.maxqtygrid-row{display:contents;}
+.maxqtygrid-label{font-size:13px;color:var(--text);}
+.maxqtyinput{width:100%;background:#0e1119;border:1px solid var(--border);color:var(--text);
+  padding:8px 10px;border-radius:8px;font-size:13.5px;outline:none;}
 .field input:focus, .field select:focus{border-color:var(--gold-soft);}
 .field input:disabled{opacity:.4;}
 .row{display:flex;gap:12px;}
@@ -548,6 +556,7 @@ body{
     <button class="tabbtn" data-page="reco"><span class="dot"></span>おすすめ</button>
     <button class="tabbtn" data-page="route"><span class="dot"></span>ルート提案</button>
     <button class="tabbtn" data-page="trend"><span class="dot"></span>販売数分析</button>
+    <button class="tabbtn" data-page="advsettings"><span class="dot"></span>詳細設定</button>
   </div>
   <div class="appbar-right">
     <div class="pill">作成リスト利益 <b id="topProfit">—</b></div>
@@ -666,7 +675,7 @@ body{
           <button type="button" class="tinybtn" id="clearCraftListBtn" style="margin-left:auto;">🗑 作成リストだけ削除</button>
         </div>
         <div class="note">
-          ブラックマーケットの売値が入力済みの装備を<b>利益率が高い順</b>に選び、装備ごとの「販売数分析タブのおすすめ製造個数 × 1.2」を<b>マックス</b>として、
+          ブラックマーケットの売値が入力済みの装備を<b>利益率が高い順</b>に選び、装備ごとの「詳細設定」で指定した<b>マックス</b>を上限として、
           資金が尽きるまで作成リストに追加します。この自動追加はマックスを超えません（すでにマックス以上を手動追加している装備はスキップします）。
           通常どおり自分でリストへ「追加」する分はこれまで通りマックスを超えてもかまいません。<br>
           「🗑 作成リストだけ削除」は、価格・ボーナス設定などはそのままに、<b>作成リストの中身だけ</b>を空にします（右上の「リセット」はすべての入力データを消すのでご注意ください）。
@@ -688,6 +697,13 @@ body{
 <div class="page" id="page-reco">
   <div class="main" style="padding:22px 26px;">
     <div id="recoList"></div>
+  </div>
+</div>
+
+<!-- ============ PAGE 6: 詳細設定 (プレミアム記憶・作成リスト自動の最大個数など) ============ -->
+<div class="page" id="page-advsettings">
+  <div class="main" style="padding:22px 26px; max-width:720px;">
+    <div id="advSettingsPanel"></div>
   </div>
 </div>
 
@@ -733,7 +749,7 @@ body{
           <button type="button" class="tinybtn" id="routeBudgetAllocateBtn">💰 資金からルート提案を自動作成</button>
         </div>
         <div class="note">
-          ブラックマーケットの売値が入力済みの装備を<b>利益率が高い順</b>に選び、装備ごとの「販売数分析タブのおすすめ製造個数 × 1.2」を<b>マックス</b>として、
+          ブラックマーケットの売値が入力済みの装備を<b>利益率が高い順</b>に選び、装備ごとの「詳細設定」で指定した<b>マックス</b>を上限として、
           資金が尽きるまで作成リストに追加したうえで、現在の作成リスト全体（この機能で追加した分＋すでに手動で追加している分）をもとに、
           <b>どこで何を何個買うか・どこで何個作るか</b>をルートごとにまとめて提案します。
         </div>
@@ -841,7 +857,7 @@ body{
         </div>
         <div class="note">
           ブラックマーケットの売値が入力されている装備（ティア・補正段階の組み合わせごと）を<b>すべて対象</b>に、AODPの出来高データからおすすめ製造個数と
-          マックス（おすすめ×1.2）をまとめて計算します。本日ボーナス対象の装備は、過去のボーナス日実績があればそちらを優先して反映します。
+          マックス（詳細設定で指定した個数）をまとめて確認できます。本日ボーナス対象の装備は、過去のボーナス日実績があればそちらを優先して反映します。
           結果は利益率が高い順に並びます。「+ 追加」でその装備をおすすめ個数のぶんだけ作成リストに追加できます。
         </div>
         <div id="trendBulkResult" style="margin-top:8px;"></div>
