@@ -2,47 +2,6 @@
    Albion 装備クラフト原価計算ツール
    ========================================================================== */
 
-/* ---------------------------------------------------------------------
-   グローバルエラー表示（タブレット等、開発者ツール(F12)のコンソールを開けない
-   端末向け）。JSの実行時エラー・Promiseの未処理rejectionを画面下部に
-   常時表示し、発生日時・エラーメッセージ・発生箇所（ファイル:行:列）を
-   そのまま表示する。これにより「何かおかしいが原因が分からない」状態を防ぐ。
---------------------------------------------------------------------- */
-(function initGlobalErrorBanner(){
-  let entries = [];
-  function render(){
-    const banner = document.getElementById('globalErrorBanner');
-    const list = document.getElementById('globalErrorBannerList');
-    if(!banner || !list) return; // banner要素が無いページでは何もしない
-    if(entries.length===0){ banner.style.display='none'; return; }
-    banner.style.display='block';
-    list.innerHTML = entries.slice(0,20).map(e=>`
-      <div style="margin-bottom:6px; padding-bottom:6px; border-bottom:1px solid rgba(255,255,255,.2);">
-        <div>[${e.time}] <b>${e.kind}</b></div>
-        <div style="word-break:break-all;">${e.message}</div>
-        ${e.where ? `<div style="opacity:.7;">${e.where}</div>` : ''}
-      </div>`).join('');
-  }
-  function push(kind, message, where){
-    entries.unshift({time: new Date().toLocaleTimeString('ja-JP'), kind, message: String(message), where});
-    if(entries.length>20) entries.length = 20;
-    render();
-  }
-  window.addEventListener('error', ev=>{
-    const where = ev.filename ? `${ev.filename}:${ev.lineno}:${ev.colno}` : '';
-    push('JSエラー', ev.message || (ev.error && ev.error.message) || String(ev), where);
-  });
-  window.addEventListener('unhandledrejection', ev=>{
-    const reason = ev.reason;
-    const message = (reason && reason.message) ? reason.message : String(reason);
-    push('未処理のPromiseエラー', message, '');
-  });
-  document.addEventListener('DOMContentLoaded', ()=>{
-    const closeBtn = document.getElementById('globalErrorBannerClose');
-    if(closeBtn) closeBtn.addEventListener('click', ()=>{ entries = []; render(); });
-  });
-})();
-
 const CATS = [
   {id:'head',   label:'頭防具',       ic:'🪖'},
   {id:'chest',  label:'胴防具',       ic:'👕'},
@@ -254,6 +213,7 @@ function defaultSettings(){
     focus:false,                  // フォーカス使用（還元率+59%）
     saleType:'quick', premium:true,
     aodpFreshnessMinutes:30,      // AODPから取得したデータのうち、この分数より古いものは自動反映しない（鮮度フィルタ）
+    defaultRecoQty:5,             // AODPの出来高データが取れない装備に使う「おすすめ製造個数」の既定値
   };
 }
 
@@ -613,128 +573,6 @@ const AODP_SERVERS = {
 };
 let aodpServer = 'east'; // デフォルトはアジアサーバー（Albion East / Singapore）
 
-/* ---------------------------------------------------------------------
-   通信エラーの可視化ログ
-   AODPとの通信（fetch）で失敗が起きても、これまでは catch で握りつぶして
-   「おすすめ製造個数」が既定値の5個にフォールバックするだけで、原因が
-   画面上には一切表示されていなかった（開発者ツール(F12)のコンソール/Networkタブを
-   見ないと分からない）。タブレット等コンソールを開けない端末でも原因が分かるよう、
-   発生したエラーをここに記録し、UI上（販売数分析タブなど）に表示する。
---------------------------------------------------------------------- */
-const AODP_ERROR_LOG = [];        // {ts, context, message}
-const AODP_ERROR_LOG_MAX = 40;    // 直近N件だけ保持
-function logAodpError(context, err){
-  const message = (err && err.message) ? String(err.message) : String(err);
-  AODP_ERROR_LOG.unshift({ts: Date.now(), context: String(context), message});
-  if(AODP_ERROR_LOG.length > AODP_ERROR_LOG_MAX) AODP_ERROR_LOG.length = AODP_ERROR_LOG_MAX;
-}
-function clearAodpErrorLog(){ AODP_ERROR_LOG.length = 0; }
-function escapeHtml(s){
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-// 直近のエラーをメッセージ内容でグルーピングし、件数の多い順に並べる（同じ原因を何十行も出さないため）
-function summarizeAodpErrors(){
-  const groups = {};
-  AODP_ERROR_LOG.forEach(e=>{
-    if(!groups[e.message]) groups[e.message] = {message:e.message, count:0, lastTs:0, sampleContext:e.context};
-    groups[e.message].count++;
-    if(e.ts > groups[e.message].lastTs){ groups[e.message].lastTs = e.ts; groups[e.message].sampleContext = e.context; }
-  });
-  return Object.values(groups).sort((a,b)=>b.count-a.count);
-}
-// AODPエラーの警告バナーHTML（エラーが無ければ空文字）。
-// 「おすすめ製造個数」が5個ばかりになる不具合の主原因はほぼ確実にこの通信エラーのため、
-// 実際に起きたエラーメッセージをそのまま画面に出す（F12が開けないタブレットでも原因が分かるように）。
-function renderAodpErrorBanner(){
-  if(AODP_ERROR_LOG.length===0) return '';
-  const summary = summarizeAodpErrors();
-  const rows = summary.slice(0,6).map(g=>{
-    const t = new Date(g.lastTs).toLocaleTimeString('ja-JP');
-    return `<div style="margin-top:4px;">・<code>${escapeHtml(g.message)}</code>　(${g.count}件／例: ${escapeHtml(g.sampleContext)}／最終発生 ${t})</div>`;
-  }).join('');
-  return `
-    <div class="note" style="margin-bottom:6px; border:1px solid var(--red,#c0392b);">
-      ⚠ AODP（Albion Online Data Project）との通信で以下のエラーが発生しています。
-      「おすすめ製造個数」が全て既定値の5個になっている場合、ほぼこれが原因です。<br>
-      ${rows}
-      <div style="margin-top:6px;">
-        よくある原因：①タブレットのブラウザ/ネットワークが east.albion-online-data.com 等への接続をブロックしている（広告・トラッキングブロッカー、機内モード的な通信制限、学校・会社のネット規制など）
-        ②AODPサーバー側が一時的にダウンしている　③選択中のサーバー（東/西/欧州）が実際のプレイサーバーと合っていない。<br>
-        まずは画面上部の「サーバー」選択が合っているか確認し、Wi-Fi⇔モバイル回線の切り替えや別ブラウザでの再試行をお試しください。
-      </div>
-    </div>`;
-}
-
-// AODP接続テスト：コンソール(F12)が開けないタブレット等でも原因が分かるよう、
-// 3サーバーそれぞれに実際にfetchしてみて、成功/失敗と生のエラー内容をそのまま画面に表示する。
-// 軽量な /api/v2/stats/prices エンドポイント（既知アイテム1件）を使い、通信そのものの可否を確認する。
-async function runAodpConnectivityTest(resultEl){
-  resultEl.innerHTML = `<div class="empty-hint">接続テスト中…</div>`;
-  const testItemId = 'T4_BAG'; // 常に存在する低ティア汎用アイテムでテスト
-  const rows = await Promise.all(Object.entries(AODP_SERVERS).map(async ([key, base])=>{
-    const url = `${base}/api/v2/stats/prices/${testItemId}.json?locations=Caerleon`;
-    const t0 = performance.now();
-    try{
-      const res = await fetch(url);
-      const ms = Math.round(performance.now()-t0);
-      if(!res.ok){
-        return {key, base, ok:false, ms, detail:`HTTP ${res.status} ${res.statusText}`};
-      }
-      const data = await res.json();
-      return {key, base, ok:true, ms, detail:`OK（${Array.isArray(data)?data.length:0}件のデータを受信）`};
-    }catch(err){
-      const ms = Math.round(performance.now()-t0);
-      // fetch自体が失敗する場合、ブラウザは詳細な理由を教えてくれないことが多いが、
-      // 典型的には「オフライン」「CORSブロック」「広告/トラッキングブロッカーによる遮断」「DNS失敗」等。
-      return {key, base, ok:false, ms, detail: `${err.name}: ${err.message}`};
-    }
-  }));
-
-  // 装備をAODPにリンクする際の「英語名検索」機能は、価格取得サーバー（east/west/europe）とは
-  // 別のドメイン（raw.githubusercontent.com、GitHub）から16MBのアイテムデータベースを取得している。
-  // 学校・会社・タブレットのネットワーク制限ではGitHubだけがブロックされているケースもあるため、
-  // こちらも別枠で確認する（HEADリクエストで実体はダウンロードせず疎通だけ見る）。
-  const ghT0 = performance.now();
-  let ghRow;
-  try{
-    const ghRes = await fetch(AODP_ITEM_DB_URL, {method:'HEAD'});
-    const ghMs = Math.round(performance.now()-ghT0);
-    ghRow = {key:'github', base:'raw.githubusercontent.com（英語名検索用データベース）', ok: ghRes.ok, ms: ghMs, detail: ghRes.ok ? 'OK' : `HTTP ${ghRes.status} ${ghRes.statusText}`};
-  }catch(err){
-    const ghMs = Math.round(performance.now()-ghT0);
-    ghRow = {key:'github', base:'raw.githubusercontent.com（英語名検索用データベース）', ok:false, ms:ghMs, detail:`${err.name}: ${err.message}`};
-  }
-  rows.push(ghRow);
-
-  const anyOk = rows.filter(r=>r.key!=='github').some(r=>r.ok);
-  const currentOk = rows.find(r=>r.key===aodpServer && r.ok);
-  const rowsHtml = rows.map(r=>`
-    <div class="routerow">
-      <span class="rerank">${r.ok?'✅':'❌'}</span>
-      <div class="bstat"><span class="bk">${r.key}${r.key===aodpServer?'（現在選択中）':''}</span><span class="bv" style="font-size:12px;">${r.base}</span></div>
-      <div class="bstat"><span class="bk">結果</span><span class="bv strong ${r.ok?'profit-pos':'profit-neg'}">${escapeHtml(r.detail)}</span></div>
-      <div class="bstat"><span class="bk">応答時間</span><span class="bv">${r.ms}ms</span></div>
-    </div>`).join('');
-
-  let summary;
-  if(!anyOk){
-    summary = `❌ 3サーバーすべてに接続できませんでした。この端末（またはこのネットワーク）からalbion-online-data.comへの通信がブロックされている可能性が高いです。
-      Wi-Fi⇔モバイル回線の切り替え、VPN/広告ブロッカーの無効化、別ブラウザでの再試行をお試しください。`;
-  }else if(!currentOk){
-    summary = `⚠ 現在選択中のサーバー「${aodpServer}」には接続できませんでしたが、他のサーバーには接続できました。画面上部の「サーバー」選択を、実際にプレイしているサーバーに合わせて変更してください。`;
-  }else{
-    summary = `✅ 現在選択中のサーバー「${aodpServer}」への接続は正常です。それでも「おすすめ製造個数」が5個ばかりになる場合は、対象の装備がAODPにリンクされていないか、その装備自体の出来高データが無い可能性があります。`;
-  }
-  if(!ghRow.ok){
-    summary += `<br>⚠ 英語名検索用データベース（GitHub: raw.githubusercontent.com）への接続に失敗しています。これが失敗していると「原価入力 &gt; 装備売値・アーティファクト」の英語名検索が使えず、装備を1件もAODPにリンクできません。この場合は下の「原価入力」タブで各装備の欄に出る「コードを直接入力」を使ってください（albion-online-data.com/identifier や /items で調べたコードをそのまま貼り付けられます）。`;
-  }
-
-  resultEl.innerHTML = `
-    <div class="note" style="margin-bottom:6px;">${summary}</div>
-    <div class="routerows">${rowsHtml}</div>
-  `;
-}
-
 function getAodpCode(itemId){
   return STATE.aodpMapping[itemId] || '';
 }
@@ -751,26 +589,6 @@ function setAodpCode(itemId, code, name){
 }
 function getAodpEnglishName(itemId){
   return STATE.aodpMappingNames ? (STATE.aodpMappingNames[itemId]||'') : '';
-}
-// 現在AODPにリンク済みの装備が何件あるかを数える。
-// 「おすすめ製造個数」が常に5個になる原因の多くは、通信エラーではなく
-// そもそも装備が1件もAODPにリンクされていないことなので、ボタンを押さなくても
-// 常に見える場所にこの件数を出すことで気づきやすくする。
-function countAodpLinkedItems(){
-  return Object.keys(STATE.aodpMapping || {}).filter(id => STATE.aodpMapping[id]).length;
-}
-function renderAodpLinkStatusBanner(){
-  const linked = countAodpLinkedItems();
-  const total = ITEMS.length;
-  if(linked===0){
-    return `<div class="note" style="margin-bottom:10px; border:1px solid var(--red,#c0392b);">
-      ⚠ 現在、AODPにリンクされている装備が<b>0件</b>です。装備がAODPにリンクされていないと通信自体が発生せず、
-      「おすすめ製造個数」は全て既定値の<b>5個</b>になります（この場合エラーは出ません＝正常な動作です）。<br>
-      「原価入力 &gt; 装備売値・アーティファクト」タブを開き、各装備の <b>英語名検索</b> から候補を選んでリンクしてください。
-      リンクした装備だけがAODPの実データ（出来高）を使った推定に切り替わります。
-    </div>`;
-  }
-  return `<div class="note" style="margin-bottom:10px;">ℹ 現在 <b>${linked}/${total}件</b> の装備がAODPにリンク済みです。リンクされていない装備は既定値の5個のままになります。</div>`;
 }
 
 /* ---------------------------------------------------------------------
@@ -1146,7 +964,7 @@ async function fetchAODPChartWithLocationFallback(id, loc, days){
         resolvedAodpLocationCache[loc] = cand; // 当たった表記を記憶し、次回以降は1回の問い合わせで済ませる
         return {raw, locationParam: cand};
       }
-    }catch(err){ lastErr = err; logAodpError(`${loc}（表記候補:${cand}）`, err); }
+    }catch(err){ lastErr = err; }
   }
   if(lastErr) throw lastErr; // どの表記でも失敗（HTTPエラー等）した場合のみ例外を投げる
   return {raw: [], locationParam: candidates[0]}; // 全表記で0件＝本当にその期間の出来高が無い
@@ -1179,7 +997,7 @@ async function fetchMarketStatsForCities(item, tier, ench, cities, days){
   if(!getAodpCode(item.id)) return {}; // AODPコード未登録なら市場データ無しとして扱う（フィルタは効かせない）
   const entries = await Promise.all(cities.map(async city=>{
     try{ return [city, await fetchAODPMarketStats(item, tier, ench, city, days)]; }
-    catch(e){ logAodpError(`${item.name} @ ${city}`, e); return [city, null]; }
+    catch(e){ return [city, null]; }
   }));
   const map = {};
   entries.forEach(([city, stats])=>{ if(stats) map[city] = stats; });
@@ -1626,10 +1444,8 @@ function renderAodpBlockHtml(item){
         <span class="aodpchip-id">${code}</span>
         ${enName ? `<span class="aodpchip-name">${enName}</span>` : ''}
         <button type="button" class="tinybtn aodpchangebtn" data-aodp-item="${item.id}">変更</button>
-        <button type="button" class="tinybtn aodptestbtn" data-aodp-item="${item.id}" style="font-size:10px;">📊 出来高テスト取得</button>
       </div>
       <div class="aodpstatus" data-aodp-status="${item.id}"></div>
-      <div class="aodptestresult" data-aodp-testresult="${item.id}"></div>
     </div>`;
   }
   return `<div class="aodpblock" data-aodp-item="${item.id}">
@@ -1638,14 +1454,6 @@ function renderAodpBlockHtml(item){
     </div>
     <div class="aodpresults" data-aodp-results="${item.id}"></div>
     <div class="aodpstatus" data-aodp-status="${item.id}"></div>
-    <div class="aodpmanualrow" style="margin-top:4px;">
-      <button type="button" class="tinybtn aodpmanualbtn" data-aodp-item="${item.id}" style="font-size:10px; padding:2px 6px;">🔧 コードを直接入力（検索が使えない場合）</button>
-      <div class="aodpmanualform" data-aodp-manualform="${item.id}" style="display:none; margin-top:4px;">
-        <input type="text" class="aodpmanualinput" placeholder="例: T4_SHOES_PLATE_SET1" data-aodp-manualinput="${item.id}" style="text-transform:uppercase;">
-        <button type="button" class="tinybtn aodpmanualsavebtn" data-aodp-item="${item.id}">保存</button>
-        <div class="note" style="margin-top:2px;">albion-online-data.com の「Identifier」または「Items」ページでUniqueName（例: <code>T4_SHOES_PLATE_SET1</code>）を調べて、そのまま貼り付けてください。英語名検索（GitHubのデータベース取得）が通信環境の都合で使えない場合の代替手段です。</div>
-      </div>
-    </div>
   </div>`;
 }
 
@@ -1708,82 +1516,6 @@ function bindAodpBlockEvents(grid, items){
     btn.addEventListener('click', ()=>{
       setAodpCode(btn.dataset.aodpItem, ''); // 空にする＝未登録扱いに戻す
       renderEquipPricePage();
-    });
-  });
-
-  // 「コードを直接入力」：英語名検索用データベース（GitHub）がネットワーク制限で
-  // 取得できない環境向けの代替手段。albion-online-data.comのIdentifier/Itemsページ等で
-  // 調べたUniqueNameをそのまま貼り付けてリンクできる（入力チェックは最小限）。
-  grid.querySelectorAll('.aodpmanualbtn').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const itemId = btn.dataset.aodpItem;
-      const formEl = grid.querySelector(`[data-aodp-manualform="${CSS.escape(itemId)}"]`);
-      if(formEl) formEl.style.display = formEl.style.display==='none' ? 'block' : 'none';
-    });
-  });
-  grid.querySelectorAll('.aodpmanualsavebtn').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const itemId = btn.dataset.aodpItem;
-      const manualInput = grid.querySelector(`[data-aodp-manualinput="${CSS.escape(itemId)}"]`);
-      const statusEl = grid.querySelector(`[data-aodp-status="${CSS.escape(itemId)}"]`);
-      const code = (manualInput.value||'').trim().toUpperCase();
-      if(!code){
-        if(statusEl){ statusEl.textContent = 'コードを入力してください'; statusEl.className = 'aodpstatus err'; }
-        return;
-      }
-      setAodpCode(itemId, code, '');
-      renderEquipPricePage();
-    });
-  });
-
-  // 「📊 出来高テスト取得」：ティア4〜8それぞれで実際に何件のデータが返ってくるかをその場で表示する。
-  // 「接続はできているのに取得できない」場合の切り分け用。
-  // ブラックマーケットだけでなく、比較のため通常の都市市場（カエルリオン）でも同じ装備・同じ日数で
-  // テストする。カエルリオン側は取れるのにブラックマーケット側だけ0件なら、ブラックマーケットの
-  // ロケーション表記（'BlackMarket' / 'Black Market'）そのものが間違っている可能性が高いと分かる。
-  // 両方とも0件なら、その装備のコード自体か、直近の取引記録が無いだけの可能性が高い。
-  grid.querySelectorAll('.aodptestbtn').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const itemId = btn.dataset.aodpItem;
-      const item = items.find(i=>i.id===itemId);
-      const resultEl = grid.querySelector(`[data-aodp-testresult="${CSS.escape(itemId)}"]`);
-      if(!item || !resultEl) return;
-      resultEl.innerHTML = `<div class="empty-hint">取得中…</div>`;
-      const code = getAodpCode(itemId);
-      const testLocations = [
-        {key: BM_LOCATION, label: 'ブラックマーケット'},
-        {key: 'Caerleon', label: 'カエルリオン市場（比較用）'},
-      ];
-      const results = await Promise.all(testLocations.map(async loc=>{
-        const rows = await Promise.all(TIERS4to8.map(async tier=>{
-          try{
-            const points = await fetchAODPDailyPoints(item, tier, 0, loc.key, RECO_LOOKBACK_DAYS);
-            return {tier, ok:true, count:points.length, sample: points.slice(-3).map(p=>`${p.date}:${p.volume}個`).join(', ')};
-          }catch(err){
-            return {tier, ok:false, count:0, sample: `${err.name}: ${err.message}`};
-          }
-        }));
-        return {loc, rows, resolvedLoc: resolvedAodpLocationCache[loc.key] || '(未解決)'};
-      }));
-      const bmAllZero = results[0].rows.every(r=>r.ok && r.count===0);
-      const caerAnyData = results[1].rows.some(r=>r.ok && r.count>0);
-      let diagnosis = '';
-      if(bmAllZero && caerAnyData){
-        diagnosis = '→ カエルリオン市場ではデータが取れるのにブラックマーケットだけ0件です。ブラックマーケットのロケーション表記が間違っている可能性が高いです（アプリ側の不具合の可能性）。この内容を開発側に伝えてください。';
-      }else if(bmAllZero && !caerAnyData){
-        diagnosis = '→ ブラックマーケット・カエルリオン市場ともに全ティアで0件でした。コード自体が間違っているか（albion-online-data.comのIdentifierページで再確認してください）、この装備は最近ほとんど取引されていない可能性があります。';
-      }else if(!bmAllZero){
-        diagnosis = '→ ブラックマーケットのデータが取得できています。「おすすめ製造個数」に反映されるはずです。';
-      }
-      resultEl.innerHTML = `
-        <div class="note" style="margin-top:4px;">
-          問い合わせID例: <code>${code.replace(/^T\d+_/, `T${TIERS4to8[0]}_`)}</code>
-          ${results.map(res=>`
-            <div style="margin-top:6px;"><b>${res.loc.label}</b>（表記: <code>${res.resolvedLoc}</code>）</div>
-            ${res.rows.map(r=>`<div style="margin-left:8px;">T${r.tier}: ${r.ok ? `${r.count}件の日次データ${r.count>0?`（直近: ${r.sample}）`:''}` : `❌ ${r.sample}`}</div>`).join('')}
-          `).join('')}
-          <div style="margin-top:6px;">${diagnosis}</div>
-        </div>`;
     });
   });
   // ※ このAODPコードは「販売数分析」タブの出来高（おすすめ製造個数）推定にのみ使う。
@@ -1990,12 +1722,17 @@ function renderSettingsBar(container, opts){
         <label>ステーション使用料（T4.0時点・silver）</label>
         <input type="number" id="stStationFeeBase" min="0" placeholder="0" value="${STATE.stationFeeBase||''}">
       </div>
+      <div class="field" style="max-width:260px;margin-top:4px;">
+        <label>AODP出来高データが無い装備の「おすすめ製造個数」既定値</label>
+        <input type="number" id="stDefaultRecoQty" min="1" step="1" value="${s.defaultRecoQty||5}">
+      </div>
       <div class="note">
         「新規追加時ティア／補正」は、下のリストから<b>新しく追加する</b>装備に使われるデフォルト値です。作成リストに追加済みの各行は、行ごとに個別のティア・補正段階を選べます（複数ティアを同時に計画できます）。<br>
         「クラフト都市」を選ぶと、その都市がボーナス都市になっている装備だけ自動的に+15%のボーナス還元率が適用されます。「購入都市」「販売都市」は、原価入力タブで都市ごとに入力した価格のうち、原価計算・利益計算にどの都市の価格を使うかを切り替えます。<br>
         ⚠ ここで選んだ「購入都市」が、原価入力タブの都市タブで実際に価格を入力した都市と<b>一致していないと、原価が0円のまま計算されてしまいます</b>（未入力として扱われるため）。原価入力タブでの選択都市と、この「購入都市」は必ず同じ都市に揃えてください（既定値はどちらもリムハーストです）。<br>
         ステーション使用料は「ティア＋補正段階の合計」が1上がるごとに倍になります（T4.0の金額を入力すれば、T4.1〜T8.4は自動計算されます。例：T4.1とT5.0は同額、T4.2とT5.1とT6.0は同額です）。<br>
-        日替わりボーナス（+10%/+20%）は「原価入力 &gt; ボーナスデー」で登録した対象の武器種・防具種にのみ自動で加算されます。出品手数料は常に2.5%固定（売り注文の時のみ）、取引税はプレミアムなら4%・なしなら8%です。
+        日替わりボーナス（+10%/+20%）は「原価入力 &gt; ボーナスデー」で登録した対象の武器種・防具種にのみ自動で加算されます。出品手数料は常に2.5%固定（売り注文の時のみ）、取引税はプレミアムなら4%・なしなら8%です。<br>
+        AODPにリンクしていない装備や、リンク済みでもブラックマーケットの出来高データが取得できない装備は、「販売数分析」「資金内で製造量を自動決定」などで、ここで設定した個数を簡易目安として使います（既定は5個）。
       </div>
     </div>
   `;
@@ -2009,6 +1746,11 @@ function renderSettingsBar(container, opts){
     setStationFeeBase(e.target.value);
     renderCraftListPanel();
     updateTopProfit();
+  });
+  document.getElementById('stDefaultRecoQty').addEventListener('change', e=>{
+    const v = Math.max(1, Math.round(Number(e.target.value)||5));
+    s.defaultRecoQty = v;
+    saveState();
   });
   document.getElementById('stSaleType').addEventListener('change', e=>{ s.saleType=e.target.value; saveState(); renderCraftListPanel(); updateTopProfit(); });
   document.getElementById('stPremium').addEventListener('change', e=>{ s.premium=e.target.checked; saveState(); renderCraftListPanel(); updateTopProfit(); });
@@ -2168,9 +1910,6 @@ function renderBuildPage(){
   renderSettingsBar(document.getElementById('buildSettingsBar'), {onChange: renderBuildPage});
   renderCategorySidebar('build', document.getElementById('buildCategoryList'), renderBuildPage);
 
-  const buildLinkStatusEl = document.getElementById('buildAodpLinkStatusBanner');
-  if(buildLinkStatusEl) buildLinkStatusEl.innerHTML = renderAodpLinkStatusBanner();
-
   const search = document.getElementById('buildSearch');
   search.value = pickerUIState.searchTerm.build;
   search.oninput = (e)=>{ pickerUIState.searchTerm.build = e.target.value.trim().toLowerCase(); renderBuildPage(); };
@@ -2209,11 +1948,10 @@ function renderBuildPage(){
         const {allocated, spent, remaining} = result;
         budgetBtn.disabled = false;
         if(allocated.length===0){
-          resultEl.innerHTML = `${renderAodpErrorBanner()}<div class="empty-hint">${budgetAllocateEmptyReason(result)}</div>`;
+          resultEl.innerHTML = `<div class="empty-hint">${budgetAllocateEmptyReason(result)}</div>`;
           return;
         }
         resultEl.innerHTML = `
-          ${renderAodpErrorBanner()}
           <div class="matneedgroup">
             <div class="matneedgroup-title">利益率が高い順に追加しました（使用額 ${fmt(spent)} / 残り ${fmt(remaining)}）</div>
             ${allocated.map(a=>`
@@ -2398,16 +2136,6 @@ function renderCraftListPanel(){
   const netProfitAfterInventory = totals.profit + inventorySavings;
 
   wrap.innerHTML = `
-    <div class="card">
-      <h3>作成リスト（${entries.length}行）</h3>
-      <div class="sub">行ごとにティア・補正段階を個別に選べます。複数ティアを同時に計画できます。</div>
-      <div class="buildrows">${rows}</div>
-    </div>
-    <div class="card summary-box">
-      <div class="summary-title">必要な素材（ティア・補正段階ごと）</div>
-      ${matGroupsHtml || `<div class="srow"><span class="k">素材データなし</span></div>`}
-      ${artGroupsHtml}
-    </div>
     <div class="card summary-box">      <div class="summary-title">合計</div>
       <div class="srow"><span class="k">素材原価（還元前）</span><span class="v">${fmt(totals.gross-totals.artifact)}</span></div>
       <div class="srow"><span class="k">還元額</span><span class="v profit-pos">-${fmt(totals.returned)}</span></div>
@@ -2423,6 +2151,18 @@ function renderCraftListPanel(){
       <div class="srow total"><span class="k">在庫考慮後の実質原価</span><span class="v">${fmt(netCostAfterInventory)}</span></div>
       <div class="srow"><span class="k">在庫考慮後の合計利益</span><span class="v ${netProfitAfterInventory>=0?'profit-pos':'profit-neg'}">${netProfitAfterInventory>=0?'+':''}${fmt(netProfitAfterInventory)}</span></div>
       ` : ''}
+      <button type="button" class="navstartbtn" id="craftListNavStartBtn" style="margin-top:10px;">🧭 カーナビ開始</button>
+      <div id="craftListNavHint" class="note" style="margin-top:6px;"></div>
+    </div>
+    <div class="card summary-box">
+      <div class="summary-title">必要な素材（ティア・補正段階ごと）</div>
+      ${matGroupsHtml || `<div class="srow"><span class="k">素材データなし</span></div>`}
+      ${artGroupsHtml}
+    </div>
+    <div class="card">
+      <h3>作成リスト（${entries.length}行）</h3>
+      <div class="sub">行ごとにティア・補正段階を個別に選べます。複数ティアを同時に計画できます。</div>
+      <div class="buildrows">${rows}</div>
     </div>
   `;
 
@@ -2448,6 +2188,31 @@ function renderCraftListPanel(){
   wrap.querySelectorAll('.removebtn').forEach(btn=>{
     btn.addEventListener('click', e=>removeFromCraftList(e.target.dataset.key));
   });
+
+  // 🧭 カーナビ開始：作成リスト全体（行ごとのティア・補正段階・個数）から、
+  // 各装備ごとの最適な購入都市・クラフト都市を計算し、同じ経路（購入都市→クラフト都市→最終目的地）
+  // でまとめられる装備をルートごとにグループ化する。利益が最も大きいルートでカーナビを開始する。
+  // ブラックマーケットの売値が入力されていない装備はルート計算から除外されるため、その旨をヒントに表示する。
+  const navBtn = document.getElementById('craftListNavStartBtn');
+  const navHint = document.getElementById('craftListNavHint');
+  if(navBtn){
+    navBtn.addEventListener('click', ()=>{
+      const navEntries = entries.map(({entry, item})=>({item, tier:entry.tier, ench:entry.ench, qty:entry.qty}));
+      const routeList = buildRouteSuggestionForEntries(navEntries);
+      if(routeList.length===0){
+        if(navHint) navHint.textContent = 'カーナビを開始できません。作成リストの装備に「原価入力 > 装備売値・アーティファクト」でブラックマーケットの売値を入力してください。';
+        return;
+      }
+      const best = routeList[0];
+      startNav(best.buyCity, best.craftCity, best.destinationCity, best.waypoints,
+        best.items.map(r=>({item:r.item, tier:r.tier, ench:r.ench, qty:r.qty, profit:r.profitPerUnit, sellPrice:r.sellPrice})));
+      if(navHint){
+        navHint.textContent = routeList.length>1
+          ? `作成リストは${routeList.length}種類の経路に分かれています。今回は利益が最も大きい経路（${routeList.length-1}経路が対象外）でカーナビを開始しました。他の経路は「ルート提案」タブから個別に開始できます。`
+          : '';
+      }
+    });
+  }
 }
 
 /* =======================================================================
@@ -2463,10 +2228,15 @@ function renderCraftListPanel(){
    ・AODP連携が無い装備は出来高を推定できないため、簡易な既定値を使う
      （販売数分析タブの一覧には出てこないが、資金配分・作成リストには含まれ得るため）。
 ======================================================================= */
-const DEFAULT_RECO_QTY = 5;          // AODP未連携時の簡易目安（個）
 const RECO_LOOKBACK_DAYS = 30;       // 出来高推定に使う過去日数
 const RECO_CACHE_MS = 20*60*1000;    // 同一装備・同一ティアの再計算をキャッシュする時間
 const recoQtyCache = {};             // craftKey -> {recommendedQty, maxQty, ...}
+// AODPの出来高データが取れない装備に使う既定値。固定の5ではなく設定画面から変更できるようにしてある
+// （AODP側にそもそもデータが無い装備も多いため、5個という数字自体に強く依存しないようにする）。
+function getDefaultRecoQty(){
+  const v = Number(STATE.settings.defaultRecoQty);
+  return (v>0) ? v : 5;
+}
 
 async function getRecommendedCraftQty(item, tier, ench){
   const key = craftKey(item.id, tier, ench);
@@ -2479,13 +2249,13 @@ async function getRecommendedCraftQty(item, tier, ench){
   const hasAodp = !!aodpCode;
 
   if(!hasAodp){
-    recommendedQty = DEFAULT_RECO_QTY;
+    recommendedQty = getDefaultRecoQty();
   }else{
     let points = [];
     try{ points = await fetchAODPDailyPoints(item, tier, ench, BM_LOCATION, RECO_LOOKBACK_DAYS); }
-    catch(e){ points = []; logAodpError(`${item.name} T${tier}.${ench}`, e); }
+    catch(e){ points = []; }
     if(points.length===0){
-      recommendedQty = DEFAULT_RECO_QTY;
+      recommendedQty = getDefaultRecoQty();
     }else{
       const subKey = subtypeKey(item.category, item.subtype);
       const bonusPts=[], normalPts=[];
@@ -2560,7 +2330,6 @@ function buildAllPricedCandidates(){
 
 // ブラックマーケットの売値が入力済みの装備をすべて対象に、おすすめ製造個数・マックスを一括計算する。
 async function analyzeAllPricedItems(){
-  clearAodpErrorLog(); // 今回の分析で発生したエラーだけをバナーに表示するため、実行前にログをクリアする
   const candidates = buildAllPricedCandidates();
   const recoList = await Promise.all(candidates.map(c=>getRecommendedCraftQty(c.item, c.tier, c.ench)));
   return candidates.map((c, i)=>({...c, ...recoList[i]}));
@@ -2574,18 +2343,14 @@ function renderTrendBulkResult(list, wrap){
   const realDataCount = list.filter(r=>r.usedRealData).length;
   const linkedCount = list.filter(r=>r.hasAodp).length;
   const resolvedLoc = resolvedAodpLocationCache[BM_LOCATION];
-  const errorBanner = renderAodpErrorBanner(); // 実際に発生した通信エラーがあればここに表示される（F12不要）
   const diagLine = realDataCount===0
-    ? `<div class="note" style="margin-bottom:6px;">⚠ ${linkedCount}件がAODPにリンク済みですが、ブラックマーケットの出来高データが1件も取得できていません（全て簡易目安の5個を使用中）。
+    ? `<div class="note" style="margin-bottom:6px;">⚠ ${linkedCount}件がAODPにリンク済みですが、ブラックマーケットの出来高データが1件も取得できていません（全て簡易目安を使用中）。
        ${linkedCount===0
          ? 'まず「原価入力 &gt; 装備売値・アーティファクト」で装備をAODPにリンクしてください。'
-         : (errorBanner
-             ? '下に具体的なエラー内容を表示しています。'
-             : 'リンクは正しいはずですが、AODP側にブラックマーケットの出来高データが無い可能性があります（通信エラーは検出されていません）。')}
+         : 'リンクは正しいはずですが、AODP側にブラックマーケットの出来高データが無い可能性があります。'}
        </div>`
     : `<div class="note" style="margin-bottom:6px;">✅ ${realDataCount}/${list.length}件で実際のAODP出来高データを使用しています${resolvedLoc?`（ブラックマーケットのロケーション表記: <code>${resolvedLoc}</code>）`:''}。</div>`;
   wrap.innerHTML = `
-    ${errorBanner}
     ${diagLine}
     <div class="matneedgroup-title" style="margin-bottom:4px;">${list.length} 件を分析しました（利益率が高い順）。</div>
     ${list.map(r=>`
@@ -2640,7 +2405,6 @@ function budgetAllocateEmptyReason(result){
 }
 
 async function autoAllocateBudget(budget, opts={}){
-  clearAodpErrorLog(); // 今回の自動配分で発生したエラーだけをバナーに表示するため、実行前にログをクリアする
   const candidates = buildMarginRankedCandidates();
   const recoList = await Promise.all(candidates.map(c=>getRecommendedCraftQty(c.item, c.tier, c.ench)));
 
@@ -2931,11 +2695,10 @@ function renderRoutePage(){
 
         routeBudgetBtn.disabled = false;
         if(entries.length===0){
-          resultEl.innerHTML = `${renderAodpErrorBanner()}<div class="empty-hint">${budgetAllocateEmptyReason(result)}</div>`;
+          resultEl.innerHTML = `<div class="empty-hint">${budgetAllocateEmptyReason(result)}</div>`;
           return;
         }
         renderBudgetRouteSuggestion(routeList, resultEl, {budget, spent, remaining});
-        resultEl.insertAdjacentHTML('afterbegin', renderAodpErrorBanner());
         if(allocated.length===0){
           resultEl.insertAdjacentHTML('afterbegin', `<div class="note" style="margin-bottom:8px;">ℹ この資金では新規追加はありませんでした（${budgetAllocateEmptyReason(result)}）。既存の作成リストの内容でルートを組みました。</div>`);
         }
@@ -3178,20 +2941,23 @@ function craftListQtyFor(item, tier, ench){
 }
 
 // 購入都市で「何を何個買うか」を、ルートに含まれる装備・個数から集計する
+// 購入都市で「何を何個買うか」を、ルートに含まれる装備・個数から集計する。
+// 素材は装備のティア・補正段階ごとに単価が変わる（例: 革T4.2と革T5.0は別価格）ため、
+// 同じ素材でもティア・補正段階が違えば別行として分ける（例: 革 T4.2 × 5個 原価12,000）。
 function buildNavShoppingList(materialCity, craftCity, items){
   const totals = {};
   items.forEach(e=>{
     const qty = e.qty || 1;
     const c = computeItemCost(e.item, e.tier, e.ench, craftCity, materialCity);
     c.breakdown.forEach(b=>{
-      const k = b.id;
-      if(!totals[k]) totals[k] = {label:b.label, qty:0, cost:0};
+      const k = `${b.id}_T${e.tier}.${e.ench}`;
+      if(!totals[k]) totals[k] = {label:`${b.label} T${e.tier}.${e.ench}`, qty:0, cost:0};
       totals[k].qty += b.rawQty*qty;
       totals[k].cost += b.grossCost*qty;
     });
     if(c.artifactQty>0){
-      const ak = `artifact_${e.item.id}_T${e.tier}`;
-      if(!totals[ak]) totals[ak] = {label:`${e.item.name} 用アーティファクト`, qty:0, cost:0};
+      const ak = `artifact_${e.item.id}_T${e.tier}.${e.ench}`;
+      if(!totals[ak]) totals[ak] = {label:`${e.item.name} 用アーティファクト T${e.tier}.${e.ench}`, qty:0, cost:0};
       totals[ak].qty += c.artifactQty*qty;
       totals[ak].cost += c.artifactCost*qty;
     }
@@ -3300,9 +3066,9 @@ function renderNavPanel(){
 
   const shoppingHtml = cur.shoppingList ? `
     <div class="matneedgroup">
-      <div class="matneedgroup-title">🛒 ここで何を何個買うか（合計 ${fmt(cur.shoppingCost)}）</div>
+      <div class="matneedgroup-title">🛒 ここで何を何個買うか（合計原価 ${fmt(cur.shoppingCost)}）</div>
       ${cur.shoppingList.map(m=>`
-        <div class="matneedrow"><span class="mnlabel">${m.label}</span><span class="mnqty">${fmt(m.qty)} 個</span><span class="mncost">${fmt(m.cost)}</span></div>
+        <div class="matneedrow"><span class="mnlabel">${m.label}</span><span class="mnqty">× ${fmt(m.qty)} 個</span><span class="mncost">原価 ${fmt(m.cost)}</span></div>
       `).join('') || '<div class="empty-hint">購入する素材はありません</div>'}
     </div>` : '';
 
@@ -3310,7 +3076,7 @@ function renderNavPanel(){
     <div class="matneedgroup">
       <div class="matneedgroup-title">🔨 ここで何個作るか</div>
       ${cur.craftList.map(c=>`
-        <div class="matneedrow"><span class="mnlabel"><img class="artthumb" src="${c.item.file}" alt=""> ${c.item.name} T${c.tier}.${c.ench}</span><span class="mnqty">${fmt(c.qty)} 個</span></div>
+        <div class="matneedrow"><span class="mnlabel"><img class="artthumb" src="${c.item.file}" alt=""> ${c.item.name} T${c.tier}.${c.ench}</span><span class="mnqty">× ${fmt(c.qty)} 個</span></div>
       `).join('')}
     </div>` : '';
 
@@ -3390,9 +3156,6 @@ function renderTrendPage(){
     enchSel.addEventListener('change', renderTrendPage);
     document.getElementById('trendDays').addEventListener('change', ()=>{ if(trendSelectedItem) computeAndRenderTrend(); });
 
-    const connTestBtn = document.getElementById('aodpConnTestBtn');
-    connTestBtn.addEventListener('click', ()=>{ runAodpConnectivityTest(document.getElementById('aodpConnTestResult')); });
-
     const bulkBtn = document.getElementById('trendBulkAnalyzeBtn');
     bulkBtn.addEventListener('click', async ()=>{
       const resultEl = document.getElementById('trendBulkResult');
@@ -3410,8 +3173,6 @@ function renderTrendPage(){
   }
 
   renderCategorySidebar('trend', document.getElementById('trendCategoryList'), renderTrendPage);
-  const linkStatusEl = document.getElementById('aodpLinkStatusBanner');
-  if(linkStatusEl) linkStatusEl.innerHTML = renderAodpLinkStatusBanner();
 
   const search = document.getElementById('trendSearch');
   search.value = pickerUIState.searchTerm.trend;
