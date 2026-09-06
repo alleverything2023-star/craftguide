@@ -679,6 +679,14 @@ function setPrice(city, material, tier, ench, val){
   STATE.cityPrices[cityPriceKey(city, material, tier, ench)] = val;
   saveState();
 }
+// 指定都市の精製素材・原材料価格（cityPricesのうち "都市:" で始まるキー）をすべて削除する
+function clearCityMaterialPrices(city){
+  const prefix = `${city}:`;
+  Object.keys(STATE.cityPrices).forEach(k=>{
+    if(k.startsWith(prefix)) delete STATE.cityPrices[k];
+  });
+  saveState();
+}
 function artifactPriceKey(itemId, tier){
   return `${itemId}_T${tier}`;
 }
@@ -731,6 +739,14 @@ function getInventoryQty(city, material, tier, ench){
 }
 function setInventoryQty(city, material, tier, ench, val){
   STATE.inventory[inventoryKey(city, material, tier, ench)] = Math.max(0, Number(val)||0);
+  saveState();
+}
+// 指定都市の在庫データ（inventoryのうち "都市:" で始まるキー）をすべて削除する
+function clearCityInventory(city){
+  const prefix = `${city}:`;
+  Object.keys(STATE.inventory).forEach(k=>{
+    if(k.startsWith(prefix)) delete STATE.inventory[k];
+  });
   saveState();
 }
 function subtypeKey(category, subtype){
@@ -1265,6 +1281,26 @@ function renderPriceCitySelector(){
       renderEquipPricePage();
     });
   });
+
+  const clearBtn = document.getElementById('clearCityMaterialPricesBtn');
+  const clearBtnCityName = document.getElementById('clearCityMaterialPricesCityName');
+  if(clearBtnCityName) clearBtnCityName.textContent = CITY_LABELS_JA[priceEntryCity] || priceEntryCity;
+  if(clearBtn){
+    // ブラックマーケットタブには素材価格の入力欄が存在しないため、削除ボタンも隠す
+    clearBtn.style.display = priceEntryCity === BM_LOCATION ? 'none' : '';
+    if(!clearBtn.dataset.bound){
+      clearBtn.dataset.bound = '1';
+      clearBtn.addEventListener('click', ()=>{
+        const cityLabel = CITY_LABELS_JA[priceEntryCity] || priceEntryCity;
+        if(confirm(`${cityLabel}に入力した精製素材・原材料の価格をすべて削除します。よろしいですか？`)){
+          clearCityMaterialPrices(priceEntryCity);
+          buildRefinedGrid();
+          updateTopProfit();
+          renderCraftListPanel();
+        }
+      });
+    }
+  }
 }
 
 /* =======================================================================
@@ -1643,6 +1679,22 @@ function renderInventoryPage(){
       renderInventoryPage();
     });
   });
+
+  const clearBtn = document.getElementById('clearInventoryBtn');
+  const clearBtnCityName = document.getElementById('clearInventoryCityName');
+  if(clearBtnCityName) clearBtnCityName.textContent = CITY_LABELS_JA[inventoryCity] || inventoryCity;
+  if(clearBtn && !clearBtn.dataset.bound){
+    clearBtn.dataset.bound = '1';
+    clearBtn.addEventListener('click', ()=>{
+      const cityLabel = CITY_LABELS_JA[inventoryCity] || inventoryCity;
+      if(confirm(`${cityLabel}の在庫データをすべて削除します。よろしいですか？`)){
+        clearCityInventory(inventoryCity);
+        renderInventoryPage();
+        renderCraftListPanel();
+        updateTopProfit();
+      }
+    });
+  }
 
   const wrap = document.getElementById('inventoryGrid');
   wrap.innerHTML = '';
