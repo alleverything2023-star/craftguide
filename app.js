@@ -886,6 +886,40 @@ function computeProfit(item, tier, ench, sellingCity){
   return {cost, sellPrice, sellingCity, net, tax, profit, margin};
 }
 
+/**
+ * 入力済みの素材価格をもとに、そのアイテムにとって最も原価が安くなる「購入都市」と「クラフト都市」を
+ * 自動的に探す（詳細設定の固定の購入都市・クラフト都市には依存しない）。
+ * ・購入都市はカエルレオンを含む全都市から、精算前の購入総額が最も安い都市を選ぶ。
+ * ・購入都市がカエルレオンの場合は、危険地帯を跨いだ輸送を避けるため、そのままカエルレオンで
+ *   クラフトする前提で計算する（他都市でクラフトする候補は評価しない）。
+ * ・それ以外の都市で購入する場合は、還元ボーナス都市も含めて最も原価が安くなるクラフト都市を選ぶ。
+ * 該当する価格データが1件も無ければ null を返す。
+ */
+function findBestCraftCost(item, tier, ench, opts={}){
+  const candidateCities = opts.candidateCities || CITIES;
+
+  let buyCity = null, bestGrossTotal = Infinity;
+  candidateCities.forEach(city=>{
+    const c = computeItemCost(item, tier, ench, city, city); // 精算前の総額比較のみに使うため craftingCity=buyingCity とする
+    if(c.grossTotal > 0 && c.grossTotal < bestGrossTotal){
+      bestGrossTotal = c.grossTotal;
+      buyCity = city;
+    }
+  });
+  if(!buyCity) return null; // 価格未入力
+
+  const craftCandidates = buyCity === 'Caerleon' ? ['Caerleon'] : candidateCities;
+  let craftCity = null, bestCost = null;
+  craftCandidates.forEach(city=>{
+    const cost = computeItemCost(item, tier, ench, city, buyCity);
+    if(!bestCost || cost.total < bestCost.total){
+      bestCost = cost;
+      craftCity = city;
+    }
+  });
+  return {buyCity, craftCity, cost: bestCost};
+}
+
 /* ---------------------------------------------------------------------
    Step④: 素材の調達方法比較（直接買う／原材料を買って精錬する／輸送する）
    T1〜T3は精錬レシピが未定義（下位ティアが存在しないか、比率が異なるため）なので
@@ -1079,7 +1113,10 @@ function recommendRoutes(item, tier, ench, qty, opts={}){
   const {net} = computeNetSell(sellPrice, {isBlackMarket:true});
 
   candidateCities.forEach(buyCity=>{
-    candidateCities.forEach(craftCity=>{
+    // カエルレオンで購入する場合は、危険地帯を跨いだ輸送を避けるため、そのままカエルレオンで
+    // クラフトする前提とする（他都市でクラフトする候補は評価しない）。
+    const craftCandidates = buyCity === 'Caerleon' ? ['Caerleon'] : candidateCities;
+    craftCandidates.forEach(craftCity=>{
       const riskTier = routeRisk([buyCity, craftCity]);
       if(riskTier > effMaxRisk) return;
 
@@ -1090,7 +1127,11 @@ function recommendRoutes(item, tier, ench, qty, opts={}){
       const profit = (net - cost.total) * qty;
 
       // ルート表示（経由地）：購入都市→クラフト都市→最終目的地。連続する同一都市は畳み込む。
-      const rawWaypoints = [buyCity, craftCity, destinationCity];
+      // クラフト都市がカエルレオンの場合は、その場でブラックマーケットに売却できるため
+      // 最終目的地への移動は発生しない前提とし、ルートに含めない。
+      const rawWaypoints = craftCity === 'Caerleon'
+        ? [buyCity, craftCity]
+        : [buyCity, craftCity, destinationCity];
       const waypoints = rawWaypoints.filter((c,i)=>i===0||c!==rawWaypoints[i-1]);
 
       // 移動時間モデル：購入→クラフト→最終目的地までのリング距離の合計
@@ -1140,28 +1181,14 @@ function calculateOptimalCraftRoutes(opts={}){
         if(rawSellPrice<=0) return;
         const {net} = computeNetSell(rawSellPrice, {isBlackMarket:true});
 
-        // a. 素材合計購入額が最も安い都市 (MaterialCity) を特定
-        //    （精算前の購入総額は購入都市の単価だけで決まり、クラフト都市の還元ボーナスには依存しないため、
-        //     ここでは craftingCity=buyingCity として grossTotal のみを比較する）
-        let materialCity = null, bestGrossTotal = Infinity;
-        candidateCities.forEach(buyCity=>{
-          const c = computeItemCost(item, tier, ench, buyCity, buyCity);
-          if(c.grossTotal > 0 && c.grossTotal < bestGrossTotal){
-            bestGrossTotal = c.grossTotal;
-            materialCity = buyCity;
-          }
-        });
-        if(!materialCity) return; // 価格未入力の素材はスキップ
-
-        // b. クラフトボーナス（返却率）と手数料を加味し、利益が最大となるクラフト都市 (CraftCity) を特定
-        //    （購入都市は a. で決めた MaterialCity に固定）
-        let craftBest = null;
-        candidateCities.forEach(craftCity=>{
-          const cost = computeItemCost(item, tier, ench, craftCity, materialCity);
-          const profit = net - cost.total;
-          if(!craftBest || profit > craftBest.profit) craftBest = {craftCity, cost, profit};
-        });
-        if(!craftBest || craftBest.profit <= minProfit) return;
+        // a. 素材合計購入額が最も安い都市 (MaterialCity) を特定し、
+        //    b. 還元ボーナスと手数料を加味して最も原価が安くなるクラフト都市 (CraftCity) を特定する
+        //    （カエルレオンで購入する場合は、そのままカエルレオンでクラフトする前提とする）
+        const bestCraft = findBestCraftCost(item, tier, ench, {candidateCities});
+        if(!bestCraft) return; // 価格未入力の素材はスキップ
+        const materialCity = bestCraft.buyCity;
+        const craftBest = {craftCity: bestCraft.craftCity, cost: bestCraft.cost, profit: net - bestCraft.cost.total};
+        if(craftBest.profit <= minProfit) return;
 
         const margin = rawSellPrice>0 ? (craftBest.profit/rawSellPrice*100) : 0;
         if(!best || craftBest.profit > best.profit){
@@ -1178,8 +1205,12 @@ function calculateOptimalCraftRoutes(opts={}){
 
   // c. ルートキー (RouteKey) の生成：購入都市→クラフト都市→最終目的地。連続する同一都市は畳み込む
   //    （例1: "Martlock -> Bridgewatch -> Lymhurst" 例2: "Bridgewatch -> Lymhurst"）
+  //    クラフト都市がカエルレオンの場合は、その場でブラックマーケットに売却できるため、
+  //    最終目的地への移動は発生しない前提とし、ルートに含めない。
   itemBestRoutes.forEach(r=>{
-    const raw = [r.materialCity, r.craftCity, destinationCity];
+    const raw = r.craftCity === 'Caerleon'
+      ? [r.materialCity, r.craftCity]
+      : [r.materialCity, r.craftCity, destinationCity];
     r.waypoints = raw.filter((c,i)=> i===0 || c!==raw[i-1]);
     r.routeKey = r.waypoints.join(' -> ');
   });
@@ -2558,25 +2589,19 @@ function buildRouteSuggestionForEntries(entries, opts={}){
     if(rawSellPrice<=0) return null;
     const {net} = computeNetSell(rawSellPrice, {isBlackMarket:true});
 
-    // a. 素材合計購入額が最も安い都市 (MaterialCity)
-    let materialCity=null, bestGrossTotal=Infinity;
-    candidateCities.forEach(buyCity=>{
-      const c = computeItemCost(item, tier, ench, buyCity, buyCity);
-      if(c.grossTotal>0 && c.grossTotal<bestGrossTotal){ bestGrossTotal=c.grossTotal; materialCity=buyCity; }
-    });
-    if(!materialCity) return null;
-
-    // b. 利益が最大となるクラフト都市 (CraftCity)（購入都市はMaterialCityに固定）
-    let craftBest=null;
-    candidateCities.forEach(craftCity=>{
-      const cost = computeItemCost(item, tier, ench, craftCity, materialCity);
-      const profit = net-cost.total;
-      if(!craftBest || profit>craftBest.profit) craftBest = {craftCity, cost, profit};
-    });
-    if(!craftBest) return null;
+    // a. 素材合計購入額が最も安い都市 (MaterialCity) と、b. 最も原価が安くなるクラフト都市 (CraftCity)
+    //    （カエルレオンで購入する場合は、そのままカエルレオンでクラフトする前提とする）
+    const bestCraft = findBestCraftCost(item, tier, ench, {candidateCities});
+    if(!bestCraft) return null;
+    const materialCity = bestCraft.buyCity;
+    const craftBest = {craftCity: bestCraft.craftCity, cost: bestCraft.cost, profit: net - bestCraft.cost.total};
 
     const margin = rawSellPrice>0 ? (craftBest.profit/rawSellPrice*100) : 0;
-    const raw = [materialCity, craftBest.craftCity, destinationCity];
+    // クラフト都市がカエルレオンの場合は、その場でブラックマーケットに売却できるため
+    // 最終目的地への移動は発生しない前提とし、ルートに含めない。
+    const raw = craftBest.craftCity === 'Caerleon'
+      ? [materialCity, craftBest.craftCity]
+      : [materialCity, craftBest.craftCity, destinationCity];
     const waypoints = raw.filter((c,i)=>i===0||c!==raw[i-1]);
     return {
       item, tier, ench, qty, materialCity, craftCity: craftBest.craftCity,
@@ -2739,11 +2764,16 @@ function renderRecoPage(){
       ENCH.forEach(e=>{
         const sp = getSellPrice(s.sellingCity, item.id, t, e);
         if(sp<=0) return;
-        const c = computeItemCost(item, t, e);
+        // 詳細設定の固定の購入都市・クラフト都市ではなく、入力済みの素材価格から
+        // 最も原価が安くなる都市の組み合わせを自動的に探す（未入力の都市のせいで原価0円に
+        // なってしまうのを防ぐ。カエルレオンの素材が入力されている場合はそこでの購入・クラフトも候補になる）。
+        const best = findBestCraftCost(item, t, e);
+        if(!best) return; // 素材価格が1都市も入力されていないアイテムは対象外
+        const c = best.cost;
         const {net} = computeNetSell(sp, {isBlackMarket: s.sellingCity===BM_LOCATION});
         const profit = net - c.total;
         const margin = profit/sp*100;
-        results.push({item, tier:t, ench:e, sellPrice:sp, cost:c.total, profit, margin});
+        results.push({item, tier:t, ench:e, sellPrice:sp, cost:c.total, profit, margin, buyCity:best.buyCity, craftCity:best.craftCity});
       });
     });
   });
@@ -2765,7 +2795,9 @@ function renderRecoPage(){
           <div class="recorow">
             <span class="rerank">${idx+1}</span>
             <img src="${r.item.file}" alt="${r.item.name}">
-            <div class="irname">${r.item.name} <span class="retier">T${r.tier}.${r.ench}</span>${isArtifactItem(r.item)?'<span class="tag-artifact">Artifact</span>':''}</div>
+            <div class="irname">${r.item.name} <span class="retier">T${r.tier}.${r.ench}</span>${isArtifactItem(r.item)?'<span class="tag-artifact">Artifact</span>':''}
+              <div style="font-size:11px;font-weight:400;color:var(--text-faint);margin-top:2px;">仕入れ: ${CITY_LABELS_JA[r.buyCity]||r.buyCity} → 製造: ${CITY_LABELS_JA[r.craftCity]||r.craftCity}</div>
+            </div>
             <div class="bstat"><span class="bk">原価</span><span class="bv">${fmt(r.cost)}</span></div>
             <div class="bstat"><span class="bk">売値</span><span class="bv">${fmt(r.sellPrice)}</span></div>
             <div class="bstat"><span class="bk">利益</span><span class="bv ${r.profit>=0?'profit-pos':'profit-neg'}">${r.profit>=0?'+':''}${fmt(r.profit)}</span></div>
