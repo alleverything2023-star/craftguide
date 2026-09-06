@@ -610,6 +610,7 @@ body{
       <p class="sub" style="color:var(--text-faint);font-size:12.5px;margin-bottom:14px;">
         選択中の都市での実際の価格（silver / 個）を入力してください。都市ごとに保存され、未入力の都市は一律のフォールバック価格が使われます。T4〜T8は補正段階（.0〜.4）ごとに入力できます。
       </p>
+      <button type="button" class="tinybtn" id="clearCityMaterialPricesBtn" style="margin-bottom:14px;">🗑 <span id="clearCityMaterialPricesCityName">この都市</span>の精製素材・原材料価格を一括削除</button>
       <div class="pricegrid" id="refinedGrid"></div>
 
       <h4 style="margin:22px 0 6px;font-size:12.5px;color:var(--gold-soft);text-transform:uppercase;letter-spacing:.05em;">原材料（精製前）</h4>
@@ -654,6 +655,7 @@ body{
         <label>在庫を入力する都市</label>
         <div class="equipcatrow" id="inventoryCityRow"></div>
       </div>
+      <button type="button" class="tinybtn" id="clearInventoryBtn" style="margin-bottom:14px;">🗑 <span id="clearInventoryCityName">この都市</span>の在庫を一括削除</button>
       <div class="pricegrid" id="inventoryGrid"></div>
     </div>
   </div>
