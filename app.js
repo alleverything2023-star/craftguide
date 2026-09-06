@@ -702,6 +702,18 @@ function setArtifactPrice(city, itemId, tier, val){
   STATE.cityArtifactPrices[cityArtifactPriceKey(city, itemId, tier)] = val;
   saveState();
 }
+// 指定都市の装備売値（citySellPrices）とアーティファクト欠片価格（cityArtifactPrices）を
+// まとめて削除する（装備売値・アーティファクトタブの「一括削除」ボタン用）
+function clearCityEquipPrices(city){
+  const prefix = `${city}:`;
+  Object.keys(STATE.citySellPrices).forEach(k=>{
+    if(k.startsWith(prefix)) delete STATE.citySellPrices[k];
+  });
+  Object.keys(STATE.cityArtifactPrices).forEach(k=>{
+    if(k.startsWith(prefix)) delete STATE.cityArtifactPrices[k];
+  });
+  saveState();
+}
 // ステーション使用料：T4.0を基準（レベル0）として、ティア+エンチャントの合計が1上がるごとに倍になる
 // （例：T4.0=base, T4.1=base×2, T5.0=base×2, T5.1=base×4, T8.4=base×2^20）
 function stationFeeLevel(tier, ench){
@@ -1366,6 +1378,22 @@ function renderEquipPricePage(){
     });
     catRow.appendChild(btn);
   });
+
+  const clearBtn = document.getElementById('clearCityEquipPricesBtn');
+  const clearBtnCityName = document.getElementById('clearCityEquipPricesCityName');
+  if(clearBtnCityName) clearBtnCityName.textContent = CITY_LABELS_JA[priceEntryCity] || priceEntryCity;
+  if(clearBtn && !clearBtn.dataset.bound){
+    clearBtn.dataset.bound = '1';
+    clearBtn.addEventListener('click', ()=>{
+      const cityLabel = CITY_LABELS_JA[priceEntryCity] || priceEntryCity;
+      if(confirm(`${cityLabel}に入力した装備売値・アーティファクト欠片価格をすべて削除します（他の都市の分は残ります）。よろしいですか？`)){
+        clearCityEquipPrices(priceEntryCity);
+        renderEquipPricePage();
+        updateTopProfit();
+        renderCraftListPanel();
+      }
+    });
+  }
 
   const subRow = document.getElementById('equipSubtypeRow');
   const panelWrap = document.getElementById('equipGridPanel');
